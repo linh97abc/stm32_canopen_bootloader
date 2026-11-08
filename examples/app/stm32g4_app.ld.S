@@ -4,7 +4,7 @@
  *              -I<repo>/common/include stm32g4_app.ld.S -o app.ld
  *
  * Nếu dùng file .ld do CubeMX sinh, chỉ cần:
- *   - FLASH ORIGIN = BLC_APP_START (0x08006800 hoặc 0x08007000), LENGTH giảm tương ứng.
+ *   - FLASH ORIGIN = BLC_APP_START, LENGTH giảm tương ứng.
  *   - Thêm ngay sau .isr_vector:
  *       .app_header (ORIGIN(FLASH) + 0x200) : { KEEP(*(.app_header)) } >FLASH
  */

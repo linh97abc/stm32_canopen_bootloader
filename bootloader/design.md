@@ -17,20 +17,20 @@ Mỗi vùng phải nằm trọn trong các page riêng, nên phân vùng phụ t
 
 | Vùng | Địa chỉ bắt đầu | Địa chỉ kết thúc | Kích thước |
 |---|---|---|---|
-| Bootloader | `0x0800_0000` | `0x0800_5FFF` | 24 KB (12 page) |
-| Config | `0x0800_6000` | `0x0800_67FF` | 2 KB (1 page) |
-| Application | `0x0800_6800` | Cuối flash | Tùy dòng chip |
+| Bootloader | `0x0800_0000` | `0x0800_4FFF` | 20 KB (10 page) |
+| Config | `0x0800_5000` | `0x0800_57FF` | 2 KB (1 page) |
+| Application | `0x0800_5800` | Cuối flash | Tùy dòng chip |
 
 **G47x / G48x, single-bank `DBANK = 0` (page 4 KB):**
 
 | Vùng | Địa chỉ bắt đầu | Địa chỉ kết thúc | Kích thước |
 |---|---|---|---|
-| Bootloader | `0x0800_0000` | `0x0800_5FFF` | 24 KB (6 page) |
-| Config | `0x0800_6000` | `0x0800_6FFF` | 4 KB (1 page) |
-| Application | `0x0800_7000` | Cuối flash | Tùy dòng chip |
+| Bootloader | `0x0800_0000` | `0x0800_4FFF` | 20 KB (5 page) |
+| Config | `0x0800_5000` | `0x0800_5FFF` | 4 KB (1 page) |
+| Application | `0x0800_6000` | Cuối flash | Tùy dòng chip |
 
 - Vùng config lưu cấu hình dùng chung cho cả app và bootloader.
-- `APP_START` (`0x0800_6800` hoặc `0x0800_7000`) căn theo page, đủ để đặt `SCB->VTOR`.
+- `APP_START` (`0x0800_5800` hoặc `0x0800_6000`) căn theo page, đủ để đặt `SCB->VTOR`.
 - `APP_START`, `CONFIG_START` và `PAGE_SIZE` là hằng số theo dòng chip, đặt trong file header dùng chung cho app và bootloader. Linker script của app cũng dùng cùng giá trị.
 - Với G47x/G48x phải giữ option byte `DBANK = 0`. Nếu chuyển sang dual-bank thì page đổi thành 2 KB và phân vùng sẽ sai.
 
@@ -187,7 +187,7 @@ Bootloader nhận stream liên tục và chia theo offset:
 **Mỗi lần boot bình thường:** chạy lại bước 1–3 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Sau đó kiểm tra valid flag tại `FLAG_ADDR`. Không verify chữ ký.
 
 **Ghi chú:**
-- G4 không có khối HASH/PKA, nên SHA-256 và RSA phải làm bằng phần mềm. Cần chọn thư viện gọn để vừa 24 KB.
+- G4 không có khối HASH/PKA, nên SHA-256 và RSA phải làm bằng phần mềm. Cần chọn thư viện gọn để vừa 20 KB.
 
 ### 5.6 Chống rollback bằng `security_version`
 

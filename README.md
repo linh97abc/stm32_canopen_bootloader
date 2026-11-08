@@ -19,7 +19,7 @@ common/              Thư viện BLC (BootLoader Common), dùng chung app + boot
     blc_crc.h          CRC-32 (khối CRC phần cứng) / CRC-8
   blc_common.mk        Fragment cho Makefile
   CMakeLists.txt       Target `blc_common` cho dự án CMake
-bootloader/          Firmware bootloader (≈ 9.7 KB / 24 KB)
+bootloader/          Firmware bootloader (kích thước vùng: `BLC_BOOTLOADER_SIZE`)
   src/board.h          Chân CAN, tần số HSE  <-- chỉnh theo board
 tools/blc_image.py   Ký image, xuất public key, xem header
 examples/app/        Ví dụ tích hợp vào app + linker script mẫu

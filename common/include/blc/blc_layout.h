@@ -21,22 +21,22 @@
 #if defined(STM32G431xx) || defined(STM32G441xx) || defined(STM32G491xx) || defined(STM32G4A1xx)
 /* Category 2 / 4: luôn single-bank, page 2 KB. */
 #define BLC_FLASH_PAGE_SIZE    BLC_U32(0x800)
-#define BLC_CONFIG_START       BLC_U32(0x08006000)
-#define BLC_APP_START          BLC_U32(0x08006800)
+#define BLC_CONFIG_START       BLC_U32(0x08005000)
+#define BLC_APP_START          BLC_U32(0x08005800)
 #define BLC_LAYOUT_NEEDS_SINGLE_BANK 0
 #elif defined(STM32G471xx) || defined(STM32G473xx) || defined(STM32G474xx) || \
       defined(STM32G483xx) || defined(STM32G484xx)
 /* Category 3: bắt buộc option byte DBANK = 0 (single-bank, page 4 KB). */
 #define BLC_FLASH_PAGE_SIZE    BLC_U32(0x1000)
-#define BLC_CONFIG_START       BLC_U32(0x08006000)
-#define BLC_APP_START          BLC_U32(0x08007000)
+#define BLC_CONFIG_START       BLC_U32(0x08005000)
+#define BLC_APP_START          BLC_U32(0x08006000)
 #define BLC_LAYOUT_NEEDS_SINGLE_BANK 1
 #else
 #error "blc_layout.h: chưa định nghĩa dòng chip STM32G4 (vd. -DSTM32G474xx)"
 #endif
 
 #define BLC_BOOTLOADER_START   BLC_FLASH_BASE
-#define BLC_BOOTLOADER_SIZE    BLC_U32(0x6000)          /* 24 KB */
+#define BLC_BOOTLOADER_SIZE    BLC_U32(0x5000)          /* 20 KB */
 #define BLC_CONFIG_SIZE        BLC_FLASH_PAGE_SIZE       /* 1 page */
 
 /* RAM mà bootloader dùng (SRAM1, nhỏ nhất trên G431 là 16 KB). */
