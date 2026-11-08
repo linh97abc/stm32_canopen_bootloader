@@ -1,14 +1,14 @@
 /*
- * Linker script mẫu cho app chạy sau bootloader PDS.
- * Tiền xử lý:  arm-none-eabi-gcc -E -P -x c -DPDS_LINKER_SCRIPT -DSTM32G474xx \
+ * Linker script mẫu cho app chạy sau bootloader.
+ * Tiền xử lý:  arm-none-eabi-gcc -E -P -x c -DBLC_LINKER_SCRIPT -DSTM32G474xx \
  *              -I<repo>/common/include stm32g4_app.ld.S -o app.ld
  *
  * Nếu dùng file .ld do CubeMX sinh, chỉ cần:
- *   - FLASH ORIGIN = PDS_APP_START (0x08006800 hoặc 0x08007000), LENGTH giảm tương ứng.
+ *   - FLASH ORIGIN = BLC_APP_START (0x08006800 hoặc 0x08007000), LENGTH giảm tương ứng.
  *   - Thêm ngay sau .isr_vector:
  *       .app_header (ORIGIN(FLASH) + 0x200) : { KEEP(*(.app_header)) } >FLASH
  */
-#include "pds/pds_layout.h"
+#include "blc/blc_layout.h"
 
 #ifndef APP_FLASH_SIZE_KB
 #define APP_FLASH_SIZE_KB 512   /* tổng flash của chip */
@@ -21,7 +21,7 @@ ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = PDS_APP_START, LENGTH = PDS_FLASH_BASE + APP_FLASH_SIZE_KB * 1024 - PDS_APP_START
+    FLASH (rx)  : ORIGIN = BLC_APP_START, LENGTH = BLC_FLASH_BASE + APP_FLASH_SIZE_KB * 1024 - BLC_APP_START
     RAM   (rwx) : ORIGIN = 0x20000000,    LENGTH = APP_RAM_SIZE_KB * 1024
 }
 
@@ -36,7 +36,7 @@ SECTIONS
 
     /* Header image tại APP_START + 0x200 (design.md mục 5.1) */
     .app_header (ORIGIN(FLASH) + 0x200) : { KEEP(*(.app_header)) } >FLASH
-    ASSERT(SIZEOF(.app_header) == 28, "thiếu PDS_APP_HEADER_DEFINE() trong app")
+    ASSERT(SIZEOF(.app_header) == 28, "thiếu BLC_APP_HEADER_DEFINE() trong app")
 
     .text :
     {

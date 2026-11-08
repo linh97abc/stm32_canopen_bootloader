@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Tool post-build cho image app PDS (bootloader/design.md mục 5).
+"""Tool post-build cho image app (bootloader/design.md mục 5).
 
 Lệnh:
   keygen    --out keys/dev                  sinh cặp khóa RSA-2048 (PEM)
   pubkey-c  --key pub.pem --out pubkey.c    xuất public key cho bootloader
-  sign      --key priv.pem --in app.bin --out app.pdsimg
-  info      --in app.pdsimg [--sec-min N]   in header, cảnh báo rollback
-  verify    --key pub.pem --in app.pdsimg   kiểm tra lại như bootloader
+  sign      --key priv.pem --in app.bin --out app.blcimg
+  info      --in app.blcimg [--sec-min N]   in header, cảnh báo rollback
+  verify    --key pub.pem --in app.blcimg   kiểm tra lại như bootloader
 
 `app.bin` là output `objcopy -O binary` của app, bắt đầu tại APP_START.
-File .pdsimg = image (đệm 0xFF cho tròn 4) + image_crc (LE) + chữ ký 256 byte.
+File .blcimg = image (đệm 0xFF cho tròn 4) + image_crc (LE) + chữ ký 256 byte.
 Gửi nguyên file này vào 0x1F50:01.
 """
 import argparse
@@ -114,7 +114,7 @@ def cmd_pubkey_c(a):
             lines.append("        " + ", ".join(f"0x{v:08x}u" for v in vals[i:i + 4]) + ",")
         return "\n".join(lines)
 
-    src = f"""/* File sinh tự động bởi tools/pds_image.py pubkey-c. KHÔNG sửa tay. */
+    src = f"""/* File sinh tự động bởi tools/blc_image.py pubkey-c. KHÔNG sửa tay. */
 #include "pubkey.h"
 
 const rsa2048_pubkey_t g_bl_pubkey = {{
@@ -136,7 +136,7 @@ def cmd_sign(a):
         img = bytearray(f.read())
     h = parse_header(img)
     if h["magic"] != HEADER_MAGIC:
-        die(f"magic sai tại 0x200 (0x{h['magic']:08x}). App có PDS_APP_HEADER_DEFINE và section .app_header chưa?")
+        die(f"magic sai tại 0x200 (0x{h['magic']:08x}). App có BLC_APP_HEADER_DEFINE và section .app_header chưa?")
     if h["header_version"] != HEADER_VERSION:
         die(f"header_version {h['header_version']} không hỗ trợ")
     if h["security_version"] == 0xFFFFFFFF:

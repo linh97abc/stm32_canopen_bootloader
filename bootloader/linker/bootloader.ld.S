@@ -1,12 +1,12 @@
-/* Linker script bootloader, tiền xử lý bằng cpp để dùng chung pds_layout.h. */
-#include "pds/pds_layout.h"
+/* Linker script bootloader, tiền xử lý bằng cpp để dùng chung blc_layout.h. */
+#include "blc/blc_layout.h"
 
 ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = PDS_BOOTLOADER_START, LENGTH = PDS_BOOTLOADER_SIZE
-    RAM   (rwx) : ORIGIN = PDS_BL_RAM_START,     LENGTH = PDS_BL_RAM_SIZE
+    FLASH (rx)  : ORIGIN = BLC_BOOTLOADER_START, LENGTH = BLC_BOOTLOADER_SIZE
+    RAM   (rwx) : ORIGIN = BLC_BL_RAM_START,     LENGTH = BLC_BL_RAM_SIZE
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);

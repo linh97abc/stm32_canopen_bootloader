@@ -1,26 +1,27 @@
-# PDS – Bootloader CANopen cho STM32G4
+# Bootloader CANopen cho STM32G4
 
 Thiết kế chi tiết: [bootloader/design.md](bootloader/design.md).
 
 ## Cấu trúc
 
 ```
-common/              Thư viện dùng chung app + bootloader
-  include/pds/
-    pds_layout.h       Phân vùng flash theo dòng chip (dùng được trong linker script)
-    pds_app_header.h   app_header_t, PDS_APP_HEADER_DEFINE(), valid flag, kiểm tra header
-    pds_config.h       Lưu config dạng log append trong 1 page flash
-    pds_config_ids.h   ID cấu hình + giá trị mặc định (NodeID, bitrate)
-    pds_identity.h     Identity CANopen 0x1000/0x1018 + serial (CRC32 của UID)
-    pds_boot.h         App -> bootloader qua backup register TAMP_BKP0R
-    pds_secver.h       Bộ đếm chống rollback SEC_MIN trong OTP
-    pds_flash.h        Ghi/xóa flash, đọc có kiểm tra ECC (NMI hook)
-    pds_crc.h          CRC-32 (khối CRC phần cứng) / CRC-8
-  pds_common.mk        Fragment cho Makefile
-  CMakeLists.txt       Target `pds_common` cho dự án CMake
+common/              Thư viện BLC (BootLoader Common), dùng chung app + bootloader.
+                     Mọi hàm/kiểu/macro có prefix blc_ / BLC_, header nằm trong blc/
+  include/blc/
+    blc_layout.h       Phân vùng flash theo dòng chip (dùng được trong linker script)
+    blc_app_header.h   app_header_t, BLC_APP_HEADER_DEFINE(), valid flag, kiểm tra header
+    blc_config.h       Lưu config dạng log append trong 1 page flash
+    blc_config_ids.h   ID cấu hình + giá trị mặc định (NodeID, bitrate)
+    blc_identity.h     Identity CANopen 0x1000/0x1018 + serial (CRC32 của UID)
+    blc_boot.h         App -> bootloader qua backup register TAMP_BKP0R
+    blc_secver.h       Bộ đếm chống rollback SEC_MIN trong OTP
+    blc_flash.h        Ghi/xóa flash, đọc có kiểm tra ECC (NMI hook)
+    blc_crc.h          CRC-32 (khối CRC phần cứng) / CRC-8
+  blc_common.mk        Fragment cho Makefile
+  CMakeLists.txt       Target `blc_common` cho dự án CMake
 bootloader/          Firmware bootloader (≈ 9.7 KB / 24 KB)
   src/board.h          Chân CAN, tần số HSE  <-- chỉnh theo board
-tools/pds_image.py   Ký image, xuất public key, xem header
+tools/blc_image.py   Ký image, xuất public key, xem header
 examples/app/        Ví dụ tích hợp vào app + linker script mẫu
 tests/               Test trên PC (flash giả, mô phỏng quy trình nạp CiA 302-3)
 third_party/         Submodule chính gốc của ST: cmsis_core, cmsis_device_g4,
@@ -31,8 +32,8 @@ third_party/         Submodule chính gốc của ST: cmsis_core, cmsis_device_g
 
 ```sh
 git submodule update --init --depth 1
-pip install cryptography            # cho tools/pds_image.py
-python3 tools/pds_image.py keygen --out keys/dev   # khóa dev (private key bị .gitignore)
+pip install cryptography            # cho tools/blc_image.py
+python3 tools/blc_image.py keygen --out keys/dev   # khóa dev (private key bị .gitignore)
 ```
 
 > Khóa production phải sinh và giữ ở nơi an toàn (HSM / máy ký riêng). Bootloader
@@ -46,7 +47,7 @@ make -C bootloader MCU=STM32G474xx      # hoặc STM32G431xx, STM32G491xx, ...
 ```
 
 Ghi đè giá trị mặc định khi cần, ví dụ:
-`make -C bootloader EXTRA_CFLAGS="-DPDS_CFG_DEFAULT_NODE_ID=10 -DBOARD_HSE_HZ=24000000"`.
+`make -C bootloader EXTRA_CFLAGS="-DBLC_CFG_DEFAULT_NODE_ID=10 -DBOARD_HSE_HZ=24000000"`.
 
 **G47x/G48x:** option byte `DBANK` phải bằng `0`. Nếu không, bootloader không
 nhảy sang app và từ chối Clear (abort `0x06060000`), để tránh xóa nhầm page.
@@ -66,34 +67,34 @@ make -C tests
 
 ## Tích hợp vào app
 
-Xem [examples/app/pds_app_glue.c](examples/app/pds_app_glue.c). Tóm tắt:
+Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 
-1. Thêm thư viện: `include common/pds_common.mk` (Makefile) hoặc
+1. Thêm thư viện: `include common/blc_common.mk` (Makefile) hoặc
    `add_subdirectory(common)` (CMake), define dòng chip (`-DSTM32G474xx`).
-2. Linker: `FLASH ORIGIN = PDS_APP_START`, thêm section `.app_header` tại
+2. Linker: `FLASH ORIGIN = BLC_APP_START`, thêm section `.app_header` tại
    `ORIGIN(FLASH) + 0x200` (mẫu: [examples/app/stm32g4_app.ld.S](examples/app/stm32g4_app.ld.S)).
-3. `PDS_APP_HEADER_DEFINE(PDS_APP_VERSION(x, y, z), security_version);`
-4. `VECT_TAB_OFFSET = PDS_APP_START - 0x08000000` trong `SystemInit`.
-5. `NMI_Handler` gọi `pds_flash_nmi_handler()`.
-6. NodeID/bitrate: `pds_config_init()`, `pds_config_node_id()`,
-   `pds_config_bitrate_idx()`. Với LSS, lưu bằng `pds_config_set_*()`.
+3. `BLC_APP_HEADER_DEFINE(BLC_APP_VERSION(x, y, z), security_version);`
+4. `VECT_TAB_OFFSET = BLC_APP_START - 0x08000000` trong `SystemInit`.
+5. `NMI_Handler` gọi `blc_flash_nmi_handler()`.
+6. NodeID/bitrate: `blc_config_init()`, `blc_config_node_id()`,
+   `blc_config_bitrate_idx()`. Với LSS, lưu bằng `blc_config_set_*()`.
 7. `0x1F51:01 = 0` (Stop program): gửi xong SDO response rồi gọi
-   `pds_boot_enter_bootloader()`.
-8. Không dùng `TAMP_BKP0R` (đổi được bằng `PDS_BOOT_BKP_INDEX`).
+   `blc_boot_enter_bootloader()`.
+8. Không dùng `TAMP_BKP0R` (đổi được bằng `BLC_BOOT_BKP_INDEX`).
 9. Post-build:
    ```sh
    arm-none-eabi-objcopy -O binary app.elf app.bin
-   python3 tools/pds_image.py sign --key keys/dev_private.pem --in app.bin --out app.pdsimg
-   python3 tools/pds_image.py info --in app.pdsimg --sec-min <SEC_MIN của thiết bị>
+   python3 tools/blc_image.py sign --key keys/dev_private.pem --in app.bin --out app.blcimg
+   python3 tools/blc_image.py info --in app.blcimg --sec-min <SEC_MIN của thiết bị>
    ```
-   Gửi `app.pdsimg` vào `0x1F50:01`.
+   Gửi `app.blcimg` vào `0x1F50:01`.
 
 ## Quy trình nạp (master)
 
 1. `0x1F51:01 = 0` → node reset vào bootloader và gửi boot-up.
 2. `0x1F51:01 = 3` (Clear). Lệnh này chỉ xóa các page chưa trống, mỗi page mất
    khoảng 20–40 ms. **Timeout SDO của master nên ≥ 5 s.**
-3. Tải `app.pdsimg` vào `0x1F50:01`. Ưu tiên SDO block (blksize 127, có CRC);
+3. Tải `app.blcimg` vào `0x1F50:01`. Ưu tiên SDO block (blksize 127, có CRC);
    segmented cũng hỗ trợ.
 4. `0x1F51:01 = 1` (Start). Bootloader verify CRC + chữ ký RSA, ghi valid flag,
    nâng SEC_MIN nếu cần, trả response rồi reset vào app. Nếu image sai thì abort
@@ -116,8 +117,8 @@ Xem [examples/app/pds_app_glue.c](examples/app/pds_app_glue.c). Tóm tắt:
 ## Việc còn mở (TODO)
 
 - Chốt dòng chip (design.md mục 7). Code đã hỗ trợ cả hai bảng phân vùng.
-- Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s trong `pds_config_ids.h`.
-- Hằng số identity (`pds_identity.h`): device type, vendor ID, product code, revision.
+- Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s trong `blc_config_ids.h`.
+- Hằng số identity (`blc_identity.h`): device type, vendor ID, product code, revision.
 - `bootloader/src/board.h`: chân CAN, chân STBY của transceiver, tần số HSE (tạm 8 MHz).
 - Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–11 hoặc 0–5) khi sản xuất.
 - Rủi ro: app hợp lệ nhưng không xử lý được Stop program thì không về được

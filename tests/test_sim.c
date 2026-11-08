@@ -10,9 +10,9 @@
 #include "fake_flash.h"
 #include "image.h"
 #include "od.h"
-#include "pds/pds_app_header.h"
-#include "pds/pds_layout.h"
-#include "pds/pds_secver.h"
+#include "blc/blc_app_header.h"
+#include "blc/blc_layout.h"
+#include "blc/blc_secver.h"
 #include "program.h"
 #include "sdo.h"
 #include "sdo_abort.h"
@@ -186,22 +186,22 @@ static uint32_t segmented_write(uint16_t idx, uint8_t sub, const uint8_t *data, 
 
 /* ---- kiểm tra ------------------------------------------------------------ */
 
-static uint32_t img_size(const blob_t *b) { return ((const pds_app_header_t *)(b->data + 0x200))->image_size; }
+static uint32_t img_size(const blob_t *b) { return ((const blc_app_header_t *)(b->data + 0x200))->image_size; }
 
 static uint64_t flag_at(const blob_t *b)
 {
     uint64_t v;
-    memcpy(&v, (void *)(uintptr_t)pds_app_flag_addr(img_size(b)), 8);
+    memcpy(&v, (void *)(uintptr_t)blc_app_flag_addr(img_size(b)), 8);
     return v;
 }
 
 static void flashed_ok(const blob_t *b)
 {
     uint32_t n = img_size(b) + 4;
-    CHECK(memcmp((void *)(uintptr_t)PDS_APP_START, b->data, n) == 0);
+    CHECK(memcmp((void *)(uintptr_t)BLC_APP_START, b->data, n) == 0);
     /* Chữ ký không được ghi vào flash; phần sau image_crc trong double-word là 0xFF */
-    const uint8_t *after = (const uint8_t *)(uintptr_t)(PDS_APP_START + n);
-    for (uint32_t i = 0; (PDS_APP_START + n + i) % 8; i++) CHECK_EQ(after[i], 0xFF);
+    const uint8_t *after = (const uint8_t *)(uintptr_t)(BLC_APP_START + n);
+    for (uint32_t i = 0; (BLC_APP_START + n + i) % 8; i++) CHECK_EQ(after[i], 0xFF);
 }
 
 static void test_od(void)
@@ -236,8 +236,8 @@ static void test_od(void)
 
 static void test_download_flow(void)
 {
-    blob_t v1 = load("v1.pdsimg"), v2 = load("v2.pdsimg"), v3 = load("v3.pdsimg");
-    blob_t bad = load("badcrc.pdsimg"), wrong = load("wrongkey.pdsimg");
+    blob_t v1 = load("v1.blcimg"), v2 = load("v2.blcimg"), v3 = load("v3.blcimg");
+    blob_t bad = load("badcrc.blcimg"), wrong = load("wrongkey.blcimg");
 
     /* Chưa Clear -> không cho nạp */
     CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_ABORT_DEVICE_STATE);
@@ -251,9 +251,9 @@ static void test_download_flow(void)
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
     CHECK(g_od_reset_request);
     g_od_reset_request = false;
-    CHECK_EQ(flag_at(&v1), PDS_APP_VALID_FLAG);
+    CHECK_EQ(flag_at(&v1), BLC_APP_VALID_FLAG);
     CHECK_EQ(image_check_boot(0), IMG_OK);
-    CHECK_EQ(pds_secver_min(), 0);
+    CHECK_EQ(blc_secver_min(), 0);
     uint32_t v;
     CHECK_EQ(sdo_read(0x1F51, 1, &v), SDO_OK);
     CHECK_EQ(v, PROG_STATUS_STOPPED);
@@ -307,14 +307,14 @@ static void test_download_flow(void)
     flashed_ok(&v2);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
     g_od_reset_request = false;
-    CHECK_EQ(pds_app_flag_addr(img_size(&v2)), PDS_APP_START + img_size(&v2) + 4);
-    CHECK_EQ(flag_at(&v2), PDS_APP_VALID_FLAG);
-    CHECK_EQ(pds_secver_min(), 2);
+    CHECK_EQ(blc_app_flag_addr(img_size(&v2)), BLC_APP_START + img_size(&v2) + 4);
+    CHECK_EQ(flag_at(&v2), BLC_APP_VALID_FLAG);
+    CHECK_EQ(blc_secver_min(), 2);
     CHECK_EQ(image_check_boot(2), IMG_OK);
     CHECK_EQ(image_check_boot(3), IMG_ROLLBACK);
 
     /* "Reboot" với SEC_MIN = 2: v1 (sec 0) và v3 (sec 1) bị từ chối ngay khi nhận header */
-    program_init(true, true, pds_secver_min());
+    program_init(true, true, blc_secver_min());
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(block_write(0x1F50, 1, v3.data, v3.len, 0, 0), SDO_ABORT_DATA_STORE);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
@@ -326,7 +326,7 @@ static void test_download_flow(void)
     CHECK_EQ(block_write(0x1F50, 1, v2.data, v2.len, 126, 0), SDO_OK);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
     g_od_reset_request = false;
-    CHECK_EQ(image_check_boot(pds_secver_min()), IMG_OK);
+    CHECK_EQ(image_check_boot(blc_secver_min()), IMG_OK);
 
     free(v1.data); free(v2.data); free(v3.data); free(bad.data); free(wrong.data);
 }
@@ -335,25 +335,25 @@ static void test_otp_full(void)
 {
     /* Hết 32 entry OTP: không nâng được nữa nhưng không ghi tràn */
     fake_flash_reset();
-    for (uint32_t i = 0; i < PDS_OTP_SECVER_ENTRIES; i++) {
-        CHECK_EQ(pds_secver_raise(i + 1), PDS_SECVER_OK);
+    for (uint32_t i = 0; i < BLC_OTP_SECVER_ENTRIES; i++) {
+        CHECK_EQ(blc_secver_raise(i + 1), BLC_SECVER_OK);
     }
-    CHECK_EQ(pds_secver_min(), PDS_OTP_SECVER_ENTRIES);
-    CHECK_EQ(pds_secver_raise(100), PDS_SECVER_FULL);
-    CHECK_EQ(pds_secver_raise(5), PDS_SECVER_UNCHANGED);
+    CHECK_EQ(blc_secver_min(), BLC_OTP_SECVER_ENTRIES);
+    CHECK_EQ(blc_secver_raise(100), BLC_SECVER_FULL);
+    CHECK_EQ(blc_secver_raise(5), BLC_SECVER_UNCHANGED);
     uint64_t next;
-    memcpy(&next, (void *)(uintptr_t)(PDS_OTP_SECVER_BASE + 8 * PDS_OTP_SECVER_ENTRIES), 8);
+    memcpy(&next, (void *)(uintptr_t)(BLC_OTP_SECVER_BASE + 8 * BLC_OTP_SECVER_ENTRIES), 8);
     CHECK_EQ(next, UINT64_MAX);
 
     /* Entry lỗi ECC / không hợp lệ bị bỏ qua */
     fake_flash_reset();
-    fake_flash_poke(PDS_OTP_SECVER_BASE, ((uint64_t)~7u << 32) | 7u);
-    fake_flash_poke(PDS_OTP_SECVER_BASE + 8, 0x0000000900000009ull); /* ~ sai */
-    fake_flash_poke(PDS_OTP_SECVER_BASE + 16, ((uint64_t)~20u << 32) | 20u);
-    fake_flash_set_ecc(PDS_OTP_SECVER_BASE + 16);
-    CHECK_EQ(pds_secver_min(), 7);
-    CHECK_EQ(pds_secver_raise(8), PDS_SECVER_OK);
-    CHECK_EQ(pds_secver_min(), 8);
+    fake_flash_poke(BLC_OTP_SECVER_BASE, ((uint64_t)~7u << 32) | 7u);
+    fake_flash_poke(BLC_OTP_SECVER_BASE + 8, 0x0000000900000009ull); /* ~ sai */
+    fake_flash_poke(BLC_OTP_SECVER_BASE + 16, ((uint64_t)~20u << 32) | 20u);
+    fake_flash_set_ecc(BLC_OTP_SECVER_BASE + 16);
+    CHECK_EQ(blc_secver_min(), 7);
+    CHECK_EQ(blc_secver_raise(8), BLC_SECVER_OK);
+    CHECK_EQ(blc_secver_min(), 8);
 }
 
 static void test_timeout(void)

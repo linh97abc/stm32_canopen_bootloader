@@ -8,9 +8,9 @@
 #include <string.h>
 #include <sys/mman.h>
 
-#include "pds/pds_flash.h"
-#include "pds/pds_layout.h"
-#include "pds/pds_secver.h"
+#include "blc/blc_flash.h"
+#include "blc/blc_layout.h"
+#include "blc/blc_secver.h"
 
 #define OTP_MAP_BASE 0x1FFF7000u
 #define OTP_MAP_SIZE 0x1000u
@@ -36,14 +36,14 @@ static void *map_at(uintptr_t addr, size_t len)
 
 void fake_flash_init(void)
 {
-    map_at(PDS_FLASH_BASE, FAKE_FLASH_SIZE);
+    map_at(BLC_FLASH_BASE, FAKE_FLASH_SIZE);
     map_at(OTP_MAP_BASE, OTP_MAP_SIZE);
     fake_flash_reset();
 }
 
 void fake_flash_reset(void)
 {
-    memset((void *)(uintptr_t)PDS_FLASH_BASE, 0xFF, FAKE_FLASH_SIZE);
+    memset((void *)(uintptr_t)BLC_FLASH_BASE, 0xFF, FAKE_FLASH_SIZE);
     memset((void *)(uintptr_t)OTP_MAP_BASE, 0xFF, OTP_MAP_SIZE);
     s_ecc_n = 0;
     s_stuck = UINT32_MAX;
@@ -67,21 +67,21 @@ void fake_flash_set_ecc(uint32_t addr)
 
 void fake_flash_poke(uint32_t addr, uint64_t v) { memcpy((void *)(uintptr_t)addr, &v, 8); }
 
-/* ---- pds_layout ---- */
-uint32_t pds_layout_flash_end(void) { return PDS_FLASH_BASE + FAKE_FLASH_SIZE; }
-bool pds_layout_check(void) { return true; }
+/* ---- blc_layout ---- */
+uint32_t blc_layout_flash_end(void) { return BLC_FLASH_BASE + FAKE_FLASH_SIZE; }
+bool blc_layout_check(void) { return true; }
 
-/* ---- pds_flash ---- */
-uint32_t pds_flash_ecc_events(void) { return s_ecc_events; }
-bool pds_flash_nmi_handler(void) { return false; }
+/* ---- blc_flash ---- */
+uint32_t blc_flash_ecc_events(void) { return s_ecc_events; }
+bool blc_flash_nmi_handler(void) { return false; }
 
 static bool in_range(uint32_t addr)
 {
-    return (addr >= PDS_FLASH_BASE && addr + 8u <= PDS_FLASH_BASE + FAKE_FLASH_SIZE) ||
+    return (addr >= BLC_FLASH_BASE && addr + 8u <= BLC_FLASH_BASE + FAKE_FLASH_SIZE) ||
            (addr >= OTP_MAP_BASE && addr + 8u <= OTP_MAP_BASE + 0x400u);
 }
 
-bool pds_flash_read_dw(uint32_t addr, uint64_t *out)
+bool blc_flash_read_dw(uint32_t addr, uint64_t *out)
 {
     if (!in_range(addr)) abort();
     memcpy(out, (void *)(uintptr_t)addr, 8);
@@ -92,7 +92,7 @@ bool pds_flash_read_dw(uint32_t addr, uint64_t *out)
     return true;
 }
 
-bool pds_flash_program_dw(uint32_t addr, uint64_t value)
+bool blc_flash_program_dw(uint32_t addr, uint64_t value)
 {
     if ((addr & 7u) || !in_range(addr)) return false;
     uint64_t cur;
@@ -107,16 +107,16 @@ bool pds_flash_program_dw(uint32_t addr, uint64_t value)
     return true;
 }
 
-bool pds_flash_erase_page(uint32_t addr)
+bool blc_flash_erase_page(uint32_t addr)
 {
-    if (addr < PDS_FLASH_BASE || addr >= PDS_FLASH_BASE + FAKE_FLASH_SIZE) return false;
-    uint32_t base = addr & ~(PDS_FLASH_PAGE_SIZE - 1u);
-    memset((void *)(uintptr_t)base, 0xFF, PDS_FLASH_PAGE_SIZE);
+    if (addr < BLC_FLASH_BASE || addr >= BLC_FLASH_BASE + FAKE_FLASH_SIZE) return false;
+    uint32_t base = addr & ~(BLC_FLASH_PAGE_SIZE - 1u);
+    memset((void *)(uintptr_t)base, 0xFF, BLC_FLASH_PAGE_SIZE);
     for (unsigned i = 0; i < s_ecc_n;) {
-        if (s_ecc[i] >= base && s_ecc[i] < base + PDS_FLASH_PAGE_SIZE) ecc_remove(i);
+        if (s_ecc[i] >= base && s_ecc[i] < base + BLC_FLASH_PAGE_SIZE) ecc_remove(i);
         else i++;
     }
-    if (s_stuck >= base && s_stuck < base + PDS_FLASH_PAGE_SIZE) s_stuck = UINT32_MAX;
+    if (s_stuck >= base && s_stuck < base + BLC_FLASH_PAGE_SIZE) s_stuck = UINT32_MAX;
     g_fake_erase_count++;
     return true;
 }

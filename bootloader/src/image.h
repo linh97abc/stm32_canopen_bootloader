@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "pds/pds_app_header.h"
+#include "blc/blc_app_header.h"
 
 typedef enum {
     IMG_OK = 0,
@@ -26,9 +26,9 @@ img_result_t image_check_boot(uint32_t sec_min);
  * lại từ flash. hdr_out nhận header đã kiểm tra.
  */
 img_result_t image_verify_download(uint32_t received, const uint8_t *sig, uint32_t sec_min,
-                                   pds_app_header_t *hdr_out);
+                                   blc_app_header_t *hdr_out);
 
 /** Ghi valid flag tại FLAG_ADDR (bước 5). */
-bool image_write_flag(const pds_app_header_t *hdr);
+bool image_write_flag(const blc_app_header_t *hdr);
 
 #endif

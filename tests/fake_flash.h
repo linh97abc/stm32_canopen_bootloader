@@ -9,7 +9,7 @@
 void fake_flash_init(void);
 /** Xóa toàn bộ flash + OTP về 0xFF, bỏ mọi lỗi ECC giả. */
 void fake_flash_reset(void);
-/** Giả lập ô double-word bị lỗi ECC 2-bit (đọc qua pds_flash_read_dw trả false). */
+/** Giả lập ô double-word bị lỗi ECC 2-bit (đọc qua blc_flash_read_dw trả false). */
 void fake_flash_set_ecc(uint32_t addr);
 /** Ghi thẳng 1 double-word (bỏ qua luật flash), dùng để dựng dữ liệu test. */
 void fake_flash_poke(uint32_t addr, uint64_t v);

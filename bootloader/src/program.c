@@ -4,14 +4,14 @@
 
 #include "clock.h"
 #include "image.h"
-#include "pds/pds_app_header.h"
-#include "pds/pds_flash.h"
-#include "pds/pds_layout.h"
-#include "pds/pds_secver.h"
+#include "blc/blc_app_header.h"
+#include "blc/blc_flash.h"
+#include "blc/blc_layout.h"
+#include "blc/blc_secver.h"
 #include "sdo_abort.h"
 
 #define SIG_MAX 256u
-#define HDR_END (PDS_APP_HEADER_OFFSET + sizeof(pds_app_header_t))
+#define HDR_END (BLC_APP_HEADER_OFFSET + sizeof(blc_app_header_t))
 
 typedef enum {
     ST_UNKNOWN,     /* chưa Clear: flash app chưa sẵn sàng nhận */
@@ -32,7 +32,7 @@ static struct {
     uint32_t flash_len;    /* image_size + 4, hoặc dung lượng vùng app khi chưa có header */
     uint32_t sig_len;
     bool hdr_known;
-    uint8_t hdr[sizeof(pds_app_header_t)];
+    uint8_t hdr[sizeof(blc_app_header_t)];
     uint8_t dw[8];
     uint8_t sig[SIG_MAX];
     uint32_t received;     /* tổng byte khi kết thúc transfer */
@@ -55,14 +55,14 @@ uint8_t program_status(void) { return P.app_valid ? PROG_STATUS_STOPPED : PROG_S
 
 static bool page_is_blank(uint32_t addr)
 {
-    uint32_t ecc = pds_flash_ecc_events();
+    uint32_t ecc = blc_flash_ecc_events();
     const volatile uint32_t *p = (const volatile uint32_t *)addr;
-    for (uint32_t i = 0; i < PDS_FLASH_PAGE_SIZE / 4u; i++) {
+    for (uint32_t i = 0; i < BLC_FLASH_PAGE_SIZE / 4u; i++) {
         if (p[i] != 0xFFFFFFFFu) {
             return false;
         }
     }
-    return pds_flash_ecc_events() == ecc;
+    return blc_flash_ecc_events() == ecc;
 }
 
 static uint32_t do_clear(void)
@@ -70,9 +70,9 @@ static uint32_t do_clear(void)
     P.app_valid = false;
     P.state = ST_DIRTY;
     /* Chỉ xóa page chưa trống để rút ngắn thời gian (mỗi page ~22 ms). */
-    for (uint32_t a = PDS_APP_START; a < pds_layout_app_end(); a += PDS_FLASH_PAGE_SIZE) {
+    for (uint32_t a = BLC_APP_START; a < blc_layout_app_end(); a += BLC_FLASH_PAGE_SIZE) {
         watchdog_kick();
-        if (!page_is_blank(a) && (!pds_flash_erase_page(a) || !page_is_blank(a))) {
+        if (!page_is_blank(a) && (!blc_flash_erase_page(a) || !page_is_blank(a))) {
             return SDO_ABORT_HW_ERROR;
         }
     }
@@ -85,7 +85,7 @@ static uint32_t do_clear(void)
 static uint32_t do_start(bool *reset_after)
 {
     if (P.state == ST_DOWNLOADED) {
-        pds_app_header_t hdr;
+        blc_app_header_t hdr;
         img_result_t r = image_verify_download(P.received, P.sig, P.sec_min, &hdr);
         if (r != IMG_OK) {
             P.state = ST_DIRTY;
@@ -96,7 +96,7 @@ static uint32_t do_start(bool *reset_after)
             return SDO_ABORT_HW_ERROR;
         }
         /* Nâng SEC_MIN sau khi đã ghi valid flag. Hết entry OTP vẫn chạy app. */
-        (void)pds_secver_raise(hdr.security_version);
+        (void)blc_secver_raise(hdr.security_version);
         P.app_valid = true;
         P.state = ST_UNKNOWN;
     }
@@ -136,7 +136,7 @@ uint32_t program_dl_begin(bool size_known, uint32_t size)
     if (P.state != ST_CLEARED) {
         return SDO_ABORT_DEVICE_STATE;
     }
-    uint32_t cap = pds_layout_app_end() - PDS_APP_START;
+    uint32_t cap = blc_layout_app_end() - BLC_APP_START;
     if (size_known && size > cap + SIG_MAX) {
         return SDO_ABORT_LEN_HIGH;
     }
@@ -157,19 +157,19 @@ static bool flush_dw(uint32_t offset_of_dw)
     if (v == UINT64_MAX) {
         return true; /* đã trống sẵn */
     }
-    return pds_flash_program_dw(PDS_APP_START + offset_of_dw, v);
+    return blc_flash_program_dw(BLC_APP_START + offset_of_dw, v);
 }
 
 static uint32_t on_header_complete(void)
 {
-    pds_app_header_t h;
+    blc_app_header_t h;
     memcpy(&h, P.hdr, sizeof h);
-    pds_hdr_result_t r = pds_app_header_check(&h, pds_layout_app_end(), P.sec_min);
-    if (r != PDS_HDR_OK) {
+    blc_hdr_result_t r = blc_app_header_check(&h, blc_layout_app_end(), P.sec_min);
+    if (r != BLC_HDR_OK) {
         return SDO_ABORT_DATA_STORE;
     }
     P.flash_len = h.image_size + 4u;
-    P.sig_len = pds_sig_len(h.sig_algo);
+    P.sig_len = blc_sig_len(h.sig_algo);
     P.hdr_known = true;
     return SDO_OK;
 }
@@ -183,8 +183,8 @@ uint32_t program_dl_data(const uint8_t *data, uint32_t len)
         uint32_t o = P.offset;
         uint8_t b = data[i];
 
-        if (!P.hdr_known && o >= PDS_APP_HEADER_OFFSET && o < HDR_END) {
-            P.hdr[o - PDS_APP_HEADER_OFFSET] = b;
+        if (!P.hdr_known && o >= BLC_APP_HEADER_OFFSET && o < HDR_END) {
+            P.hdr[o - BLC_APP_HEADER_OFFSET] = b;
         }
         if (o < P.flash_len) {
             P.dw[o & 7u] = b;

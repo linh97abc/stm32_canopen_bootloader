@@ -1,6 +1,6 @@
-#include "pds/pds_crc.h"
+#include "blc/blc_crc.h"
 
-uint8_t pds_crc8(const void *data, size_t len)
+uint8_t blc_crc8(const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
     uint8_t crc = 0x00u;
@@ -13,9 +13,9 @@ uint8_t pds_crc8(const void *data, size_t len)
     return (uint8_t)(crc ^ 0x55u);
 }
 
-#ifdef PDS_CRC32_SOFTWARE
+#ifdef BLC_CRC32_SOFTWARE
 
-uint32_t pds_crc32(const void *data, size_t len)
+uint32_t blc_crc32(const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
     uint32_t crc = 0xFFFFFFFFu;
@@ -34,7 +34,7 @@ uint32_t pds_crc32(const void *data, size_t len)
 #include "stm32g4xx_ll_bus.h"
 #include "stm32g4xx_ll_crc.h"
 
-uint32_t pds_crc32(const void *data, size_t len)
+uint32_t blc_crc32(const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
 

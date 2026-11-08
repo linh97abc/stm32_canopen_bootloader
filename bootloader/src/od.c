@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "pds/pds_identity.h"
+#include "blc/blc_identity.h"
 #include "program.h"
 #include "sdo_abort.h"
 
@@ -36,7 +36,7 @@ uint32_t od_read(uint16_t index, uint8_t sub, uint8_t buf[4], uint8_t *len)
     switch (index) {
     case 0x1000:
         if (sub != 0) return SDO_ABORT_NO_SUBINDEX;
-        v = PDS_ID_DEVICE_TYPE;
+        v = BLC_ID_DEVICE_TYPE;
         break;
     case 0x1001:
         if (sub != 0) return SDO_ABORT_NO_SUBINDEX;
@@ -51,10 +51,10 @@ uint32_t od_read(uint16_t index, uint8_t sub, uint8_t buf[4], uint8_t *len)
     case 0x1018:
         switch (sub) {
         case 0: v = 4; n = 1; break;
-        case 1: v = PDS_ID_VENDOR_ID; break;
-        case 2: v = PDS_ID_PRODUCT_CODE; break;
-        case 3: v = PDS_ID_REVISION; break;
-        case 4: v = pds_identity_serial(); break;
+        case 1: v = BLC_ID_VENDOR_ID; break;
+        case 2: v = BLC_ID_PRODUCT_CODE; break;
+        case 3: v = BLC_ID_REVISION; break;
+        case 4: v = blc_identity_serial(); break;
         default: return SDO_ABORT_NO_SUBINDEX;
         }
         break;

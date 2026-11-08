@@ -3,9 +3,9 @@
  * Code chạy từ flash: CPU bị stall trong lúc ghi/xóa, điều này được chấp nhận
  * (design.md mục 4).
  */
-#include "pds/pds_flash.h"
+#include "blc/blc_flash.h"
 
-#include "pds/pds_layout.h"
+#include "blc/blc_layout.h"
 #include "stm32g4xx.h"
 
 #define FLASH_KEY1  0x45670123UL
@@ -17,9 +17,9 @@
 
 static volatile uint32_t s_ecc_events;
 
-uint32_t pds_flash_ecc_events(void) { return s_ecc_events; }
+uint32_t blc_flash_ecc_events(void) { return s_ecc_events; }
 
-bool pds_flash_nmi_handler(void)
+bool blc_flash_nmi_handler(void)
 {
     if ((FLASH->ECCR & FLASH_ECCR_ECCD) != 0u) {
         /* ECCD là rc_w1. Giữ nguyên ECCCIE, không xóa nhầm ECCC. */
@@ -30,7 +30,7 @@ bool pds_flash_nmi_handler(void)
     return false;
 }
 
-bool pds_flash_read_dw(uint32_t addr, uint64_t *out)
+bool blc_flash_read_dw(uint32_t addr, uint64_t *out)
 {
     uint32_t before = s_ecc_events;
     uint32_t lo = *(volatile const uint32_t *)addr;
@@ -76,7 +76,7 @@ static void flash_flush_caches(void)
     FLASH->ACR = acr;
 }
 
-bool pds_flash_program_dw(uint32_t addr, uint64_t value)
+bool blc_flash_program_dw(uint32_t addr, uint64_t value)
 {
     if ((addr & 7u) != 0u || !flash_unlock()) {
         return false;
@@ -91,12 +91,12 @@ bool pds_flash_program_dw(uint32_t addr, uint64_t value)
     return ok;
 }
 
-bool pds_flash_erase_page(uint32_t addr)
+bool blc_flash_erase_page(uint32_t addr)
 {
-    if (addr < PDS_FLASH_BASE || addr >= pds_layout_flash_end() || !pds_layout_check()) {
+    if (addr < BLC_FLASH_BASE || addr >= blc_layout_flash_end() || !blc_layout_check()) {
         return false;
     }
-    uint32_t page = (addr - PDS_FLASH_BASE) / PDS_FLASH_PAGE_SIZE;
+    uint32_t page = (addr - BLC_FLASH_BASE) / BLC_FLASH_PAGE_SIZE;
     if (!flash_unlock()) {
         return false;
     }
