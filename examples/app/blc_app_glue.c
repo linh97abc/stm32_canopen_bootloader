@@ -2,7 +2,8 @@
  * Ví dụ tích hợp thư viện common/ vào app (dùng được với dự án HAL/CubeMX).
  *
  * App cần:
- *   1. Khai báo header image (BLC_APP_HEADER_DEFINE) đúng 1 lần.
+ *   1. Linker script chừa .app_header (xem stm32g4_app.ld.S); version điền
+ *      lúc ký: blc_image.py sign --app-version x.y.z --sec-version N.
  *   2. Đặt VTOR = BLC_APP_START (trong SystemInit: USER_VECT_TAB_ADDRESS,
  *      VECT_TAB_OFFSET = BLC_APP_START - FLASH_BASE). Bootloader cũng đã đặt
  *      VTOR trước khi nhảy, nhưng SystemInit của Cube thường ghi đè lại.
@@ -12,15 +13,11 @@
  *      blc_boot_enter_bootloader().
  *   6. Identity 0x1000/0x1018 lấy từ blc_identity.h.
  */
-#include "blc/blc_app_header.h"
 #include "blc/blc_boot.h"
 #include "blc/blc_config.h"
 #include "blc/blc_flash.h"
 #include "blc/blc_identity.h"
 #include "blc/blc_layout.h"
-
-/* (1) app_version 1.0.0, security_version 0. Chỉ tăng security_version cho bản vá bảo mật. */
-BLC_APP_HEADER_DEFINE(BLC_APP_VERSION(1, 0, 0), 0);
 
 /* (3) Nếu dùng file stm32g4xx_it.c của Cube, sửa NMI_Handler ở đó thay vì ở đây. */
 void NMI_Handler(void)

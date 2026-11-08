@@ -2,9 +2,10 @@
  * @file blc_app_header.h
  * @brief Định dạng header của image app (design.md mục 5).
  *
- * App khai báo header bằng macro BLC_APP_HEADER_DEFINE(), linker script của app
- * đặt section `.app_header` tại APP_START + 0x200. Tool `tools/blc_image.py`
- * điền `sig_algo`, `build_time`, `image_size`, `header_crc` lúc post-build.
+ * Linker script của app chừa 28 byte 0 (section `.app_header`) tại
+ * APP_START + 0x200. Lệnh `tools/blc_image.py sign` điền toàn bộ header lúc
+ * post-build (app_version, security_version lấy từ tham số dòng lệnh).
+ * Lúc runtime, app đọc header bằng blc_app_header_in_flash().
  */
 #ifndef BLC_APP_HEADER_H
 #define BLC_APP_HEADER_H
@@ -45,23 +46,6 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(blc_app_header_t) == 28u, "app_header_t phải 28 byte");
 
 #define BLC_APP_HEADER_CRC_LEN    24u
-
-/**
- * Khai báo header trong source của app (đúng 1 lần):
- *   BLC_APP_HEADER_DEFINE(BLC_APP_VERSION(1, 2, 3), 0);
- */
-#define BLC_APP_HEADER_DEFINE(app_ver, sec_ver)                                    \
-    __attribute__((section(".app_header"), used))                                  \
-    const blc_app_header_t blc_app_header = {                                      \
-        .magic = BLC_APP_HEADER_MAGIC,                                             \
-        .header_version = BLC_APP_HEADER_VERSION,                                  \
-        .sig_algo = 0xFFFFu,  /* tool ký điền */                                   \
-        .app_version = (app_ver),                                                  \
-        .security_version = (sec_ver),                                             \
-        .build_time = 0u,     /* tool điền nếu = 0 */                              \
-        .image_size = 0u,     /* tool điền */                                      \
-        .header_crc = 0u,     /* tool điền */                                      \
-    }
 
 /** Độ dài chữ ký theo sig_algo, 0 nếu bootloader không hỗ trợ. */
 static inline uint32_t blc_sig_len(uint16_t sig_algo)

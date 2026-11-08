@@ -11,19 +11,19 @@ import tempfile
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-def make_bin(path, size, app_version, sec_version, seed, app_start):
+def make_bin(path, size, seed, app_start):
     rnd = random.Random(seed)
     img = bytearray(rnd.getrandbits(8) for _ in range(size))
     struct.pack_into("<II", img, 0, 0x20008000, app_start + 0x401)  # SP, Reset (Thumb)
-    hdr = struct.pack("<IHHIIIII", 0x48534450, 1, 0xFFFF, app_version, sec_version, 0, 0, 0)
-    img[0x200:0x200 + len(hdr)] = hdr
+    img[0x200:0x200 + 28] = bytes(28)  # như linker script: 28 byte 0, tool ký điền
     with open(path, "wb") as f:
         f.write(img)
 
 
-def sign(tool, key, src, dst):
+def sign(tool, key, src, dst, app_version, sec_version):
     env = dict(os.environ, SOURCE_DATE_EPOCH="1700000000")
-    subprocess.run([sys.executable, tool, "sign", "--key", key, "--in", src, "--out", dst],
+    subprocess.run([sys.executable, tool, "sign", "--key", key, "--in", src, "--out", dst,
+                    "--app-version", app_version, "--sec-version", str(sec_version)],
                    check=True, env=env, stdout=subprocess.DEVNULL)
 
 
@@ -39,11 +39,12 @@ def main():
     o = lambda n: os.path.join(a.out, n)
 
     # image_size % 8 == 0 (flag cách image_crc 4 byte) và % 8 == 4 (flag liền sau)
-    make_bin(o("v1.bin"), 20000, 0x01000000, 0, 1, a.app_start)       # 20000 % 8 == 0
-    make_bin(o("v2.bin"), 9 * 1024 + 2, 0x02000000, 2, 2, a.app_start)  # đệm lên 9220, % 8 == 4
-    make_bin(o("v3.bin"), 4000, 0x03000000, 1, 3, a.app_start)        # security_version 1 < 2
-    for n in ("v1", "v2", "v3"):
-        sign(a.tool, a.key, o(n + ".bin"), o(n + ".blcimg"))
+    make_bin(o("v1.bin"), 20000, 1, a.app_start)         # 20000 % 8 == 0
+    make_bin(o("v2.bin"), 9 * 1024 + 2, 2, a.app_start)  # đệm lên 9220, % 8 == 4
+    make_bin(o("v3.bin"), 4000, 3, a.app_start)
+    versions = {"v1": ("1.0.0", 0), "v2": ("2.0.0", 2), "v3": ("3.0.0", 1)}  # v3: sec 1 < 2
+    for n, (app_ver, sec_ver) in versions.items():
+        sign(a.tool, a.key, o(n + ".bin"), o(n + ".blcimg"), app_ver, sec_ver)
 
     # CRC đúng nhưng chữ ký bởi khóa khác
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -51,7 +52,7 @@ def main():
         f.write(other.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                     serialization.NoEncryption()))
         other_path = f.name
-    sign(a.tool, other_path, o("v1.bin"), o("wrongkey.blcimg"))
+    sign(a.tool, other_path, o("v1.bin"), o("wrongkey.blcimg"), *versions["v1"])
     os.unlink(other_path)
 
     # Hỏng 1 byte trong payload -> image_crc sai

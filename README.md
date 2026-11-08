@@ -9,7 +9,7 @@ common/              Thư viện BLC (BootLoader Common), dùng chung app + boot
                      Mọi hàm/kiểu/macro có prefix blc_ / BLC_, header nằm trong blc/
   include/blc/
     blc_layout.h       Phân vùng flash theo dòng chip (dùng được trong linker script)
-    blc_app_header.h   app_header_t, BLC_APP_HEADER_DEFINE(), valid flag, kiểm tra header
+    blc_app_header.h   app_header_t, valid flag, kiểm tra header, blc_app_header_in_flash()
     blc_config.h       Lưu config dạng log append trong 1 page flash
     blc_config_ids.h   ID cấu hình + giá trị mặc định (NodeID, bitrate)
     blc_identity.h     Identity CANopen 0x1000/0x1018 + serial (CRC32 của UID)
@@ -71,9 +71,9 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 
 1. Thêm thư viện: `include common/blc_common.mk` (Makefile) hoặc
    `add_subdirectory(common)` (CMake), define dòng chip (`-DSTM32G474xx`).
-2. Linker: `FLASH ORIGIN = BLC_APP_START`, thêm section `.app_header` tại
-   `ORIGIN(FLASH) + 0x200` (mẫu: [examples/app/stm32g4_app.ld.S](examples/app/stm32g4_app.ld.S)).
-3. `BLC_APP_HEADER_DEFINE(BLC_APP_VERSION(x, y, z), security_version);`
+2. Linker: `FLASH ORIGIN = BLC_APP_START`, thêm section `.app_header` gồm 28 byte 0
+   tại `ORIGIN(FLASH) + 0x200` (mẫu: [examples/app/stm32g4_app.ld.S](examples/app/stm32g4_app.ld.S)).
+3. Không cần khai báo header trong code. Đọc header lúc runtime bằng `blc_app_header_in_flash()`.
 4. `VECT_TAB_OFFSET = BLC_APP_START - 0x08000000` trong `SystemInit`.
 5. `NMI_Handler` gọi `blc_flash_nmi_handler()`.
 6. NodeID/bitrate: `blc_config_init()`, `blc_config_node_id()`,
@@ -84,10 +84,12 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 9. Post-build:
    ```sh
    arm-none-eabi-objcopy -O binary app.elf app.bin
-   python3 tools/blc_image.py sign --key keys/dev_private.pem --in app.bin --out app.blcimg
+   python3 tools/blc_image.py sign --key keys/dev_private.pem --in app.bin --out app.blcimg \
+       --app-version 1.2.3 --sec-version 0
    python3 tools/blc_image.py info --in app.blcimg --sec-min <SEC_MIN của thiết bị>
    ```
-   Gửi `app.blcimg` vào `0x1F50:01`.
+   Gửi `app.blcimg` vào `0x1F50:01`. `--sec-version` chỉ tăng cho bản vá bảo mật:
+   nạp xong thiết bị sẽ không nhận bản có `security_version` thấp hơn nữa.
 
 ## Quy trình nạp (master)
 
@@ -120,6 +122,6 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 - Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s trong `blc_config_ids.h`.
 - Hằng số identity (`blc_identity.h`): device type, vendor ID, product code, revision.
 - `bootloader/src/board.h`: chân CAN, chân STBY của transceiver, tần số HSE (tạm 8 MHz).
-- Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–11 hoặc 0–5) khi sản xuất.
+- Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–9 trên G431/G491, 0–4 trên G474) khi sản xuất.
 - Rủi ro: app hợp lệ nhưng không xử lý được Stop program thì không về được
   bootloader qua CAN. Có thể cân nhắc thêm cửa sổ chờ ngắn lúc boot.

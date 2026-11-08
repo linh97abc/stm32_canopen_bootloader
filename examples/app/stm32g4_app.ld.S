@@ -6,7 +6,8 @@
  * Nếu dùng file .ld do CubeMX sinh, chỉ cần:
  *   - FLASH ORIGIN = BLC_APP_START, LENGTH giảm tương ứng.
  *   - Thêm ngay sau .isr_vector:
- *       .app_header (ORIGIN(FLASH) + 0x200) : { KEEP(*(.app_header)) } >FLASH
+ *       .app_header (ORIGIN(FLASH) + 0x200) : { LONG(0) LONG(0) LONG(0) LONG(0)
+ *                                                LONG(0) LONG(0) LONG(0) } >FLASH
  */
 #include "blc/blc_layout.h"
 
@@ -34,9 +35,12 @@ SECTIONS
     .isr_vector : { . = ALIGN(4); KEEP(*(.isr_vector)) } >FLASH
     ASSERT(SIZEOF(.isr_vector) <= 0x200, "vector table đè lên app header")
 
-    /* Header image tại APP_START + 0x200 (design.md mục 5.1) */
-    .app_header (ORIGIN(FLASH) + 0x200) : { KEEP(*(.app_header)) } >FLASH
-    ASSERT(SIZEOF(.app_header) == 28, "thiếu BLC_APP_HEADER_DEFINE() trong app")
+    /* Header image tại APP_START + 0x200 (design.md mục 5.1): chừa 28 byte 0,
+       tools/blc_image.py sign điền lúc post-build. */
+    .app_header (ORIGIN(FLASH) + 0x200) :
+    {
+        LONG(0) LONG(0) LONG(0) LONG(0) LONG(0) LONG(0) LONG(0)
+    } >FLASH
 
     .text :
     {

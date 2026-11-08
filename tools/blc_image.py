@@ -4,11 +4,12 @@
 Lệnh:
   keygen    --out keys/dev                  sinh cặp khóa RSA-2048 (PEM)
   pubkey-c  --key pub.pem --out pubkey.c    xuất public key cho bootloader
-  sign      --key priv.pem --in app.bin --out app.blcimg
+  sign      --key priv.pem --in app.bin --out app.blcimg --app-version 1.2.3 --sec-version 0
   info      --in app.blcimg [--sec-min N]   in header, cảnh báo rollback
   verify    --key pub.pem --in app.blcimg   kiểm tra lại như bootloader
 
 `app.bin` là output `objcopy -O binary` của app, bắt đầu tại APP_START.
+Linker script của app chỉ chừa 28 byte 0 tại offset 0x200; lệnh sign điền toàn bộ header.
 File .blcimg = image (đệm 0xFF cho tròn 4) + image_crc (LE) + chữ ký 256 byte.
 Gửi nguyên file này vào 0x1F50:01.
 """
@@ -131,24 +132,42 @@ const rsa2048_pubkey_t g_bl_pubkey = {{
         f.write(src)
 
 
+def parse_version(s):
+    try:
+        major, minor, patch = (int(x) for x in s.split("."))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"cần dạng major.minor.patch, nhận '{s}'")
+    if not (0 <= major <= 0xFF and 0 <= minor <= 0xFF and 0 <= patch <= 0xFFFF):
+        raise argparse.ArgumentTypeError("major/minor tối đa 255, patch tối đa 65535")
+    return (major << 24) | (minor << 16) | patch
+
+
+def parse_sec_version(s):
+    v = int(s, 0)
+    if not 0 <= v < 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("security_version phải trong [0, 0xFFFFFFFE]")
+    return v
+
+
 def cmd_sign(a):
     with open(a.input, "rb") as f:
         img = bytearray(f.read())
-    h = parse_header(img)
-    if h["magic"] != HEADER_MAGIC:
-        die(f"magic sai tại 0x200 (0x{h['magic']:08x}). App có BLC_APP_HEADER_DEFINE và section .app_header chưa?")
-    if h["header_version"] != HEADER_VERSION:
-        die(f"header_version {h['header_version']} không hỗ trợ")
-    if h["security_version"] == 0xFFFFFFFF:
-        die("security_version 0xFFFFFFFF không hợp lệ")
+    if len(img) < HEADER_OFFSET + HEADER_SIZE:
+        die("file quá ngắn, không có header tại 0x200")
 
     while len(img) % 4:
         img.append(0xFF)
 
-    h["sig_algo"] = SIG_ALGO_RSA2048_PKCS1V15
-    h["image_size"] = len(img)
-    if h["build_time"] == 0:
-        h["build_time"] = int(os.environ.get("SOURCE_DATE_EPOCH", time.time()))
+    h = {
+        "magic": HEADER_MAGIC,
+        "header_version": HEADER_VERSION,
+        "sig_algo": SIG_ALGO_RSA2048_PKCS1V15,
+        "app_version": a.app_version,
+        "security_version": a.sec_version,
+        "build_time": int(os.environ.get("SOURCE_DATE_EPOCH", time.time())),
+        "image_size": len(img),
+        "header_crc": 0,
+    }
     h["header_crc"] = crc32(pack_header(h)[:24])
     img[HEADER_OFFSET:HEADER_OFFSET + HEADER_SIZE] = pack_header(h)
 
@@ -215,6 +234,9 @@ def main():
     s.set_defaults(fn=cmd_pubkey_c)
     s = sp.add_parser("sign"); s.add_argument("--key", required=True)
     s.add_argument("--in", dest="input", required=True); s.add_argument("--out", required=True)
+    s.add_argument("--app-version", required=True, type=parse_version, help="major.minor.patch")
+    s.add_argument("--sec-version", required=True, type=parse_sec_version,
+                   help="chỉ tăng cho bản vá bảo mật; nạp xong sẽ nâng SEC_MIN, không hạ lại được")
     s.set_defaults(fn=cmd_sign)
     s = sp.add_parser("info"); s.add_argument("--in", dest="input", required=True)
     s.add_argument("--sec-min", type=int); s.set_defaults(fn=cmd_info)

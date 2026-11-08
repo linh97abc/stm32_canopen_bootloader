@@ -84,7 +84,7 @@ Bootloader chỉ hỗ trợ các object bắt buộc theo CiA 301 và CiA 302-3.
 ### 5.1 Bố cục image
 
 ```
-APP_START (0x0800_6800 hoặc 0x0800_7000, mục 2)
+APP_START (mục 2)
 ├── 0x000  Vector table
 ├── 0x200  app_header_t (APP_START + 0x200)
 ├── ...    Code / data của app (đệm 0xFF cho tròn bội số 4 byte)
@@ -94,7 +94,7 @@ APP_START (0x0800_6800 hoặc 0x0800_7000, mục 2)
 
 File image mà master gửi qua `0x1F50` gồm: **image + `image_crc` + chữ ký**. Chữ ký chỉ dùng để verify, nên bootloader giữ nó trong RAM và **không ghi vào flash**.
 
-- Header đặt ở offset cố định `0x200` qua section `.app_header` trong linker script của app.
+- Header đặt ở offset cố định `0x200` qua section `.app_header` trong linker script của app. Linker script chỉ chừa 28 byte 0, tool post-build điền toàn bộ các trường (`app_version`, `security_version` lấy từ tham số dòng lệnh).
 - `image_size` tính từ `APP_START` đến hết app (có cả vector table và header). **Không** gồm `image_crc`. Phải là bội số của 4 để `image_crc` được căn 4 byte.
 - `image_crc` nằm ngay sau image.
 
@@ -158,7 +158,7 @@ typedef struct __attribute__((packed)) {
 
 - CRC32 dùng đa thức `0x04C11DB7`, init `0xFFFFFFFF`, đảo bit vào/ra, XOR cuối `0xFFFFFFFF` (giống CRC-32 của zlib). Tính bằng khối CRC phần cứng của G4: cấu hình `REV_IN` = byte, `REV_OUT` = 1, XOR cuối làm bằng phần mềm.
 - Chữ ký phủ cả header, nên muốn sửa `sig_algo`, `security_version`… mà không làm hỏng chữ ký là không thể.
-- Tool post-build trên PC lần lượt: đệm image cho tròn bội số 4 → điền `image_size` → tính `header_crc` → tính `image_crc` rồi nối vào cuối → ký → nối chữ ký vào cuối file.
+- Tool post-build trên PC lần lượt: đệm image cho tròn bội số 4 → điền toàn bộ header (`magic`, `header_version`, `sig_algo`, `app_version`, `security_version`, `build_time`, `image_size`) → tính `header_crc` → tính `image_crc` rồi nối vào cuối → ký → nối chữ ký vào cuối file.
 
 ### 5.4 Nhận image qua `0x1F50`
 
