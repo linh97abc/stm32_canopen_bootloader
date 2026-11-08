@@ -1,0 +1,86 @@
+#include "clock.h"
+
+#include "board.h"
+#include "stm32g4xx.h"
+#include "stm32g4xx_ll_bus.h"
+#include "stm32g4xx_ll_pwr.h"
+#include "stm32g4xx_ll_rcc.h"
+#include "stm32g4xx_ll_system.h"
+
+uint32_t SystemCoreClock = 16000000u; /* CMSIS, thay cho system_stm32g4xx.c */
+
+static volatile uint32_t s_ms;
+static uint32_t s_fdcan_hz;
+
+void SysTick_Handler(void) { s_ms++; }
+
+uint32_t clock_ms(void) { return s_ms; }
+
+uint32_t clock_fdcan_hz(void) { return s_fdcan_hz; }
+
+void watchdog_kick(void) { IWDG->KR = 0xAAAAu; }
+
+static void delay_cycles(uint32_t n)
+{
+    while (n--) {
+        __NOP();
+    }
+}
+
+static bool hse_start(void)
+{
+#if BOARD_HSE_BYPASS
+    LL_RCC_HSE_EnableBypass();
+#endif
+    LL_RCC_HSE_Enable();
+    for (uint32_t t = 0; t < 2000000u; t++) {
+        if (LL_RCC_HSE_IsReady()) {
+            return true;
+        }
+    }
+    LL_RCC_HSE_Disable();
+    return false;
+}
+
+void clock_init(void)
+{
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
+    LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
+
+    /* Range 1 normal mode cho phép tới 150 MHz với 4 wait state. */
+    LL_PWR_SetRegulVoltageScaling(LL_PWR_REGU_VOLTAGE_SCALE1);
+    LL_FLASH_SetLatency(LL_FLASH_LATENCY_4);
+    while (LL_FLASH_GetLatency() != LL_FLASH_LATENCY_4) {
+    }
+    FLASH->ACR |= FLASH_ACR_PRFTEN | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
+
+    /* PLL: HSI16 / 4 * 75 / 2 = 150 MHz */
+    LL_RCC_PLL_ConfigDomain_SYS(LL_RCC_PLLSOURCE_HSI, LL_RCC_PLLM_DIV_4, 75, LL_RCC_PLLR_DIV_2);
+    LL_RCC_PLL_Enable();
+    LL_RCC_PLL_EnableDomain_SYS();
+    while (!LL_RCC_PLL_IsReady()) {
+    }
+
+    /* Lên > 80 MHz phải qua bước trung gian AHB/2 ít nhất 1 µs (RM0440). */
+    LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_2);
+    LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
+    while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL) {
+    }
+    delay_cycles(200u);
+    LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
+    LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_1);
+    LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_1);
+    SystemCoreClock = BL_SYSCLK_HZ;
+
+    if (hse_start()) {
+        LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_HSE);
+        s_fdcan_hz = BOARD_HSE_HZ;
+    } else {
+        /* Dự phòng: HSI ±1%, chỉ tin cậy ở bitrate thấp. */
+        LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_PCLK1);
+        s_fdcan_hz = BL_SYSCLK_HZ;
+    }
+
+    SysTick_Config(BL_SYSCLK_HZ / 1000u);
+    NVIC_SetPriority(SysTick_IRQn, 2u);
+}

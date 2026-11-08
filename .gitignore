@@ -1,0 +1,4 @@
+build/
+__pycache__/
+# Khóa bí mật KHÔNG bao giờ commit
+keys/*_private.pem
