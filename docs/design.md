@@ -81,14 +81,12 @@ Cửa sổ cứu node bịt lỗ hổng này: chỉ cần reset được node (t
 
 ```mermaid
 flowchart TD
-    RST([Bootloader khởi động]) --> MAGIC{"Backup register<br/>có magic?"}
-    MAGIC -- có --> CLR["Xóa magic"]
-    MAGIC -- không --> CLK
-    CLR --> CLK["Lên 150 MHz (PLL từ HSI16), SysTick 1 ms"]
+    RST([Bootloader khởi động]) --> CLK["Lên 150 MHz (PLL từ HSI16), SysTick 1 ms"]
     CLK --> CFG["Đọc config: NodeID, bitrate (mục 6)"]
-    CFG --> HAS{"Có magic?"}
-    HAS -- có --> CAN
-    HAS -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    CFG --> MAGIC{"Backup register<br/>có magic?"}
+    MAGIC -- có --> CLR["Xóa magic"]
+    CLR --> CAN
+    MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
     CHK -- không --> CAN
     CHK -- có --> OFF{"T_min = 0<br/>(tắt lúc build)?"}
 
@@ -115,6 +113,8 @@ flowchart TD
     REPLY -- không --> WAIT
     OK --> WAIT(["Chờ lệnh nạp từ master (mục 4)"])
 ```
+
+- Magic được đọc và xóa sau khi đã lên clock và đọc config. Nếu node bị reset giữa chừng (mất điện, watchdog lúc đang sửa page config) thì magic vẫn còn, yêu cầu ở lại bootloader không bị mất.
 
 **Hành vi trong cửa sổ:**
 - Cửa sổ chỉ mở ở nhánh "không có magic, app hợp lệ", ngay trước khi jump. Khi có magic hoặc app không hợp lệ thì không có cửa sổ, luồng giữ nguyên.

@@ -2,8 +2,9 @@
  * Bootloader CANopen cho STM32G4 (xem docs/design.md).
  *
  * Luồng khởi động:
- *   1. Đọc magic trong backup register (app yêu cầu ở lại bootloader).
- *   2. Lên 150 MHz ở mọi nhánh, kiểm tra app, đọc config (NodeID, bitrate).
+ *   1. Lên 150 MHz ở mọi nhánh, đọc config (NodeID, bitrate).
+ *   2. Đọc và xóa magic trong backup register (app yêu cầu ở lại bootloader),
+ *      kiểm tra app.
  *   3. Không có magic + app hợp lệ (header, CRC, valid flag) -> mở cửa sổ cứu
  *      node (mục 3.1): bật FDCAN, chỉ nghe T ms. Không bắt được Stop thì đưa
  *      mọi thứ đã dùng (kể cả clock) về trạng thái reset rồi nhảy sang app.
@@ -81,13 +82,9 @@ static bool rescue_window(uint8_t node_id, uint8_t bitrate_idx, can_frame_t *sto
 
 int main(void)
 {
-    bool stay = blc_boot_take_request();
     clock_init();
 
     bool layout_ok = blc_layout_check();
-    uint32_t sec_min = blc_secver_min();
-    bool app_valid = layout_ok && image_check_boot(sec_min) == IMG_OK;
-
     uint8_t node_id = BLC_CFG_DEFAULT_NODE_ID;
     uint8_t bitrate_idx = BLC_CFG_DEFAULT_BITRATE_IDX;
     if (layout_ok) {
@@ -95,6 +92,11 @@ int main(void)
         node_id = blc_config_node_id();
         bitrate_idx = blc_config_bitrate_idx();
     }
+
+    /* Đọc và xóa magic sau config: reset giữa chừng thì yêu cầu ở lại vẫn còn. */
+    bool stay = blc_boot_take_request();
+    uint32_t sec_min = blc_secver_min();
+    bool app_valid = layout_ok && image_check_boot(sec_min) == IMG_OK;
 
     can_frame_t stop;
     bool caught = false;
