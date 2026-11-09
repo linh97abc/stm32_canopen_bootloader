@@ -289,7 +289,7 @@ Bootloader nhận stream liên tục và chia theo offset:
 6. Nếu `security_version > SEC_MIN` thì ghi entry mới vào OTP (mục 5.6).
 7. Trả SDO response cho Start program rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới) rồi jump sang app. Không jump thẳng, để app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
 
-**Mỗi lần boot bình thường:** chạy lại bước 1–3 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Sau đó kiểm tra valid flag tại `FLAG_ADDR`. Không verify chữ ký.
+**Mỗi lần boot bình thường:** chạy lại bước 1–2 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Bước 3 gồm hai điều kiện: `image_crc` đúng và valid flag tại `FLAG_ADDR` bằng `APPVALID`. Valid flag thay cho bước 4, nên không verify lại chữ ký.
 
 ```mermaid
 flowchart TD
@@ -307,10 +307,9 @@ flowchart TD
     subgraph BOOT["Mỗi lần boot bình thường"]
         direction TB
         B1{"Bước 1: header"} -- đạt --> B2{"Bước 2: chỉ kiểm tra<br/>giới hạn vùng app"}
-        B2 -- đạt --> B3{"Bước 3: image_crc"}
-        B3 -- đạt --> B4{"Valid flag tại FLAG_ADDR<br/>= APPVALID?"}
-        B4 -- đúng --> BJ([Jump sang app])
-        B1 & B2 & B3 & B4 -- sai --> BS([Ở lại bootloader])
+        B2 -- đạt --> B3{"Bước 3: image_crc đúng<br/>và valid flag tại FLAG_ADDR = APPVALID"}
+        B3 -- đạt --> BJ([Jump sang app])
+        B1 & B2 & B3 -- sai --> BS([Ở lại bootloader])
     end
 ```
 

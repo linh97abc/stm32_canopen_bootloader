@@ -46,15 +46,16 @@ img_result_t image_check_boot(uint32_t sec_min)
     if (r != IMG_OK) {
         return r;
     }
-    if ((r = check_crc(&hdr)) != IMG_OK) {
-        return r;
-    }
+    /* Flag trước CRC: chỉ đọc 8 byte, image chưa có flag bị loại mà không cần quét cả image. */
     uint64_t flag;
     if (!blc_flash_read_dw(blc_app_flag_addr(hdr.image_size), &flag)) {
         return IMG_ECC_ERROR;
     }
     if (flag != BLC_APP_VALID_FLAG) {
         return IMG_NOT_VALID;
+    }
+    if ((r = check_crc(&hdr)) != IMG_OK) {
+        return r;
     }
     return boot_vectors_ok() ? IMG_OK : IMG_BAD_VECTORS;
 }
