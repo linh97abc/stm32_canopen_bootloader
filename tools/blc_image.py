@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tool post-build cho image app (bootloader/design.md mục 5).
+"""Tool post-build cho image app (docs/design.md mục 5).
 
 Lệnh:
   keygen    --out keys/dev                  sinh cặp khóa RSA-2048 (PEM)

@@ -36,27 +36,98 @@ Mỗi vùng phải nằm trọn trong các page riêng, nên phân vùng phụ t
 
 ## 3. Chuyển từ App sang Bootloader
 
-1. App nhận lệnh **Stop program** (ghi `0x1F51:01 = 0`).
-2. App ghi một giá trị magic vào backup register (`TAMP_BKPxR`), rồi gọi `NVIC_SystemReset()`.
+1. App nhận lệnh **Stop program** (ghi `0x1F51:01 = 0`) và trả SDO response.
+2. App chờ tới khi SDO response đã thực sự ra bus (TX FIFO của FDCAN rỗng), rồi ghi một giá trị magic vào backup register (`TAMP_BKPxR`) và gọi `NVIC_SystemReset()`. Reset sớm hơn thì response bị mất.
 3. Bootloader khởi động và đọc backup register:
    - **Có magic:** xóa magic, ở lại bootloader và gửi boot-up message (`0x700 + NodeID`, data `0x00`).
    - **Không có magic:** kiểm tra app hợp lệ (mục 5). Nếu hợp lệ thì jump sang app, nếu không thì ở lại bootloader.
 
+```mermaid
+flowchart TD
+    STOP["App nhận Stop program<br/>(0x1F51:01 = 0)"] --> WR["App ghi magic vào TAMP_BKPxR<br/>rồi NVIC_SystemReset()"]
+    WR --> RST
+    POR(["Power-on / reset khác"]) --> RST([Bootloader khởi động])
+    RST --> MAGIC{"Backup register<br/>có magic?"}
+    MAGIC -- có --> CLR["Xóa magic"]
+    CLR --> STAY["Ở lại bootloader<br/>gửi boot-up: 0x700 + NodeID, data 0x00"]
+    MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    CHK -- có --> JMP([Jump sang app])
+    CHK -- không --> STAY
+    STAY --> WAIT(["Chờ lệnh nạp từ master (mục 4)"])
+```
+
 > Backup register giữ được giá trị qua system reset. Trước khi ghi cần bật clock PWR và set bit `DBP` (`PWR_CR1`) để mở quyền ghi backup domain.
+
+**App xử lý `0x1F51:01`:**
+
+| Truy cập | App làm gì |
+|---|---|
+| Ghi `0` (Stop) | Chuyển về bootloader như trên |
+| Ghi `1` (Start) | Trả OK, vì app đang chạy rồi. Nhờ vậy master gửi lại Start khi mất response của bootloader (mục 4.2) sẽ không bị báo nạp lỗi |
+| Ghi `3` (Clear) | SDO abort `0x08000022`. Phải Stop về bootloader trước |
+| Đọc | `1` (program started). Bootloader trả `0` hoặc `3` (mục 4.1), nên master phân biệt được node đang ở app hay bootloader. `0x1018` không dùng được cho việc này vì identity của hai bên giống hệt nhau |
 
 ## 4. Quy trình nạp firmware (CiA 302-3)
 
 | Bước | Master (PC) | Bootloader / App |
 |---|---|---|
 | 1 | Gửi **Stop program**: `0x1F51:01 = 0` | Nếu đang ở App thì chuyển về bootloader (mục 3) |
-| 2 | Chờ boot-up message từ node | Bootloader gửi boot-up |
-| 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa toàn bộ vùng app |
+| 2 | Chờ boot-up message từ node. Không thấy thì poll `0x1F51:01` (mục 4.2) | Bootloader gửi boot-up |
+| 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa page đầu (vector table + header) để app cũ hết hiệu lực. Các page sau xóa dần khi nhận image (xóa lazy) |
 | 4 | Tải image vào `0x1F50:01` bằng **SDO block transfer** | Nhận dữ liệu và ghi vào flash |
-| 5 | Gửi **Start program**: `0x1F51:01 = 1` | Kiểm tra CRC và chữ ký. Nếu đúng: đánh dấu valid rồi jump sang app. Nếu sai: báo SDO abort và ở lại bootloader |
+| 5 | Gửi **Start program**: `0x1F51:01 = 1` | Kiểm tra CRC và chữ ký (mục 5.5). Nếu đúng: đánh dấu valid, trả SDO response rồi reset. Sau reset, bootloader kiểm tra app như boot bình thường (mục 3) rồi jump sang app. Nếu sai: báo SDO abort và ở lại bootloader |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Master (PC)
+    participant A as App
+    participant B as Bootloader
+    participant F as Flash / OTP
+
+    M->>A: Stop program (0x1F51:01 = 0)
+    A-->>M: SDO response
+    A->>A: Ghi magic vào TAMP_BKPxR, NVIC_SystemReset()
+    Note over B: Có magic → xóa magic, ở lại bootloader (mục 3)
+    B->>M: Boot-up (0x700 + NodeID, data 0x00)
+
+    M->>B: Clear program (0x1F51:01 = 3)
+    B->>F: Xóa page đầu (vector table + header)
+    B-->>M: SDO response
+    Note over B,F: App cũ hết hiệu lực. Các page sau xóa dần khi nhận image
+
+    M->>B: SDO block download vào 0x1F50:01
+    loop Mỗi block (blksize 127 = 889 byte, gom trong RAM)
+        B->>F: Xóa page mới mà stream chạm tới
+        B->>F: Ghi phần [0, image_size + 4) từ APP_START
+        B-->>M: Block ACK (sau khi ghi xong)
+    end
+    Note over B,F: Đủ header (offset 0x200–0x21B): kiểm tra magic, header_version,<br/>header_crc, sig_algo, security_version. Sai → SDO abort sớm.<br/>Đúng → xóa page chứa FLAG_ADDR rồi mới ghi double-word chứa magic (mục 5.1.1)
+    Note over B: Chữ ký giữ trong RAM, không ghi flash (mục 5.4)
+    B-->>M: End block response
+
+    M->>B: Start program (0x1F51:01 = 1)
+    B->>F: Kiểm tra hợp lệ (mục 5.5, bước 1–4)<br/>CRC và chữ ký tính trên dữ liệu đọc lại từ flash
+    alt Hợp lệ
+        B->>F: Ghi valid flag tại FLAG_ADDR
+        B->>F: Ghi entry OTP nếu security_version > SEC_MIN (mục 5.6)
+        B-->>M: SDO response
+        B->>B: NVIC_SystemReset()
+        Note over B: Boot bình thường: không có magic, app hợp lệ (mục 3)
+        B->>A: Jump sang app
+    else Sai
+        B-->>M: SDO abort, ở lại bootloader
+    end
+```
 
 **Lưu ý khi nhận SDO block:**
 - Mỗi RX FIFO của FDCAN trên G4 chỉ có 3 phần tử. Bootloader phải lấy frame ra kịp, nên ưu tiên xử lý bằng ngắt.
-- Khi ghi hoặc xóa flash, CPU bị stall (fetch từ cùng bank). Vì vậy nên gom một block vào RAM và chỉ ghi flash **giữa các block**, sau khi đã gửi block ACK. `blksize` chọn sao cho vừa buffer RAM (127 segment × 7 byte = 889 byte).
+- Khi ghi hoặc xóa flash, CPU bị stall (fetch từ cùng bank) và không lấy được frame ra khỏi FIFO. Vì vậy gom một block vào RAM, ghi flash (và xóa page nếu cần) **xong rồi mới gửi block ACK**. Client chỉ gửi block kế tiếp sau khi nhận ACK, nên trong lúc CPU stall không có frame nào tới. Nếu gửi ACK trước rồi mới ghi, block sau sẽ tới ngay trong lúc ghi (~10 ms/block) và tràn FIFO 3 phần tử.
+- `blksize` chọn sao cho vừa buffer RAM (127 segment × 7 byte = 889 byte).
+- **Xóa lazy khi Clear:** nếu xóa toàn bộ vùng app thì mất tới ~10 s (G491 đầy: 245 page × ~40 ms), master rất dễ bị SDO timeout. Vì vậy Clear chỉ xóa page đầu, các page sau được xóa khi stream chạm tới. Một block 889 byte cắt qua tối đa một ranh giới page, nên:
+  - Clear trả lời sau tối đa một lần xóa page.
+  - Mỗi block ACK chậm thêm tối đa một lần xóa page.
+  - Master dùng được timeout SDO mặc định cho cả hai lệnh này.
 
 ### 4.1 Object dictionary của bootloader
 
@@ -73,11 +144,45 @@ Bootloader chỉ hỗ trợ các object bắt buộc theo CiA 301 và CiA 302-3.
 | `0x1018:03` | Revision number | RO | CiA 301 | Giống app |
 | `0x1018:04` | Serial number | RO | CiA 301 | CRC32 của UID 96-bit của chip (`0x1FFF_7590`), app tính cùng cách |
 | `0x1F50:01` | Program data | WO | CiA 302-3 | Nhận image (mục 5.4) |
-| `0x1F51:01` | Program control | RW | CiA 302-3 | Ghi: `0` = Stop, `1` = Start, `3` = Clear |
+| `0x1F51:01` | Program control | RW | CiA 302-3 | Ghi: `0` = Stop (đã ở bootloader nên chỉ trả OK), `1` = Start, `3` = Clear. Đọc: `0` = có app hợp lệ (đang đứng ở bootloader), `3` = không có app hợp lệ. App trả `1` (mục 3) |
 
 - Các hằng số của `0x1000` và `0x1018:01–03`, cùng hàm tính serial number, đặt trong file header/source dùng chung với app. Như vậy identity của bootloader và app luôn giống hệt nhau.
 - Không hỗ trợ (đều là tùy chọn): `0x100A`, `0x1F56`, `0x1F57`.
 - Bootloader **không hỗ trợ LSS** (CiA 305). Nếu cần LSS thì app làm, rồi ghi NodeID/bitrate vào config. Bootloader chỉ đọc config.
+
+### 4.2 Mất bản tin và khôi phục
+
+Mọi lệnh trong quy trình đều gửi lại được (idempotent). Khi mất bản tin, master chỉ cần gửi lại hoặc poll, không cần biết chính xác bản tin nào đã mất.
+
+| Sự cố | Trạng thái node | Master làm gì |
+|---|---|---|
+| Mất response của Stop | Đã ở bootloader | Gửi lại Stop (bootloader trả OK) hoặc đọc `0x1F51:01` |
+| Mất boot-up | Ở bootloader, heartbeat mặc định tắt | Poll đọc `0x1F51:01` tới khi ra `0`/`3`. Muốn nhận lại boot-up thì gửi NMT `0x82` (Reset Communication) |
+| Timeout ở Clear | Đã hoặc đang xóa page đầu | Gửi lại Clear. Page đã trống thì không xóa lại |
+| Mất block ACK, lỗi giữa chừng | Transfer dở | Gửi SDO abort → Clear → nạp lại |
+| Mất response OK của Start | Đã reset sang app | Gửi lại Start (app trả OK, mục 3). Xác nhận bằng đọc `0x1F51:01 = 1` |
+| Mất abort của Start | Bootloader, nạp hỏng | Gửi lại Start sẽ nhận `0x08000022`. Clear rồi nạp lại |
+
+- Bootloader chỉ gửi boot-up **một lần**, nên master không được coi boot-up là điều kiện bắt buộc. Nên chờ boot-up một khoảng ngắn, nếu không thấy thì chuyển sang poll.
+- **Không dùng NMT `0x81` (Reset Node) để khôi phục** khi đang ở bootloader. Magic đã bị xóa từ lần boot trước, nên nếu app cũ còn hợp lệ (chưa Clear) thì node sẽ nhảy về app.
+- Trong lúc một transfer `0x1F50` đang dở, nếu quá 2 s không nhận được frame nào thì bootloader tự abort (`0x05040000`) và coi như nạp hỏng.
+- Lệnh Start thường lâu hơn các lệnh khác, vì phải tính SHA-256 trên toàn bộ image và verify RSA (mục 5.5). Master nên đặt timeout riêng cho Start, dài hơn timeout mặc định.
+
+### 4.3 Hủy giữa chừng
+
+Master hủy được ở bất kỳ bước nào để nạp image khác:
+
+| Đang ở bước | Cách hủy |
+|---|---|
+| Sau Stop, chưa Clear | Start để quay về app cũ (app còn hợp lệ thì bootloader trả OK rồi reset vào app), hoặc Clear để nạp bản khác |
+| Đang nhận SDO block | **Gửi SDO abort trước.** Theo CiA 301, trong pha nhận block mọi frame khác đều bị coi là segment, nên gửi thẳng lệnh mới sẽ không có tác dụng |
+| Đang nhận SDO segmented | Gửi SDO abort, hoặc gửi luôn request mới (request mới hủy transfer cũ) |
+| Nhận xong, chưa Start | Clear |
+| Start bị abort | Clear |
+| Đang Clear | Không hủy được, phải chờ lệnh xong |
+
+- Sau khi hủy, node coi như nạp hỏng: phải Clear thì mới nạp lại được.
+- Sau Clear thì không quay về app cũ được, vì chỉ có một vùng app, không có bản sao lưu. Mất điện lúc này thì node vẫn đứng ở bootloader (không có app hợp lệ), nên luôn nạp lại được.
 
 ## 5. Định dạng image và kiểm tra hợp lệ
 
@@ -108,7 +213,7 @@ File image mà master gửi qua `0x1F50` gồm: **image + `image_crc` + chữ k�
   - Valid: `0x44494C41_56505041`, byte trong flash là `"APPVALID"`. Bootloader so khớp đủ 8 byte.
   - Chưa valid: `0xFFFF_FFFF_FFFF_FFFF` (flash đã xóa).
   - Thu hồi (tùy chọn): ghi toàn bộ `0x00`.
-- **Bị xóa cùng app** khi master gửi Clear program, nên một app mới nạp dở không bao giờ còn mang cờ valid cũ.
+- **Không bao giờ đi cùng header của image mới nạp dở.** Clear chỉ xóa page đầu, nên `APPVALID` của image cũ có thể còn sót ở page sau. Vì vậy khi nhận đủ header, bootloader xóa page chứa `FLAG_ADDR` của image mới **trước**, rồi mới ghi double-word chứa `magic`. Mất điện ở bất kỳ thời điểm nào cũng không để lại header hợp lệ kèm flag cũ.
 - Cách này không dùng tới vùng config. Mất config cũng không làm mất trạng thái valid của app.
 
 ### 5.2 Cấu trúc header
@@ -182,9 +287,32 @@ Bootloader nhận stream liên tục và chia theo offset:
 4. Verify chữ ký trong buffer RAM theo `sig_algo`, tính trên dữ liệu **đọc lại từ flash** (`[APP_START, APP_START + image_size + 4)`). Như vậy là xác thực đúng những gì đã thực sự ghi vào flash. Public key lưu trong bootloader.
 5. Cả 4 bước đều đạt thì ghi valid flag tại `FLAG_ADDR`.
 6. Nếu `security_version > SEC_MIN` thì ghi entry mới vào OTP (mục 5.6).
-7. Jump sang app.
+7. Trả SDO response cho Start program rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới) rồi jump sang app. Không jump thẳng, để app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
 
 **Mỗi lần boot bình thường:** chạy lại bước 1–3 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Sau đó kiểm tra valid flag tại `FLAG_ADDR`. Không verify chữ ký.
+
+```mermaid
+flowchart TD
+    subgraph START["Khi nhận Start program"]
+        direction TB
+        S1{"Bước 1: magic, header_version,<br/>header_crc, security_version ≥ SEC_MIN"} -- đạt --> S2{"Bước 2: image_size bội số 4<br/>image_size + 4 + sig_len = số byte đã nhận<br/>FLAG_ADDR + 8 trong vùng app"}
+        S2 -- đạt --> S3{"Bước 3: CRC [APP_START, +image_size)<br/>= image_crc"}
+        S3 -- đạt --> S4{"Bước 4: Chữ ký trên dữ liệu<br/>đọc lại từ flash"}
+        S4 -- đạt --> S5["Bước 5: Ghi valid flag tại FLAG_ADDR"]
+        S5 --> S6["Bước 6: Nâng SEC_MIN trong OTP nếu cần"]
+        S6 --> S7(["Bước 7: SDO response, reset<br/>→ boot bình thường → jump sang app"])
+        S1 & S2 & S3 & S4 -- sai --> SX([SDO abort, ở lại bootloader])
+    end
+
+    subgraph BOOT["Mỗi lần boot bình thường"]
+        direction TB
+        B1{"Bước 1: header"} -- đạt --> B2{"Bước 2: chỉ kiểm tra<br/>giới hạn vùng app"}
+        B2 -- đạt --> B3{"Bước 3: image_crc"}
+        B3 -- đạt --> B4{"Valid flag tại FLAG_ADDR<br/>= APPVALID?"}
+        B4 -- đúng --> BJ([Jump sang app])
+        B1 & B2 & B3 & B4 -- sai --> BS([Ở lại bootloader])
+    end
+```
 
 **Ghi chú:**
 - G4 không có khối HASH/PKA, nên SHA-256 và RSA phải làm bằng phần mềm. Cần chọn thư viện gọn để vừa 20 KB.

@@ -10,7 +10,8 @@
  *   3. Gọi blc_flash_nmi_handler() trong NMI_Handler.
  *   4. Đọc NodeID/bitrate từ config (giống hệt bootloader).
  *   5. Khi nhận 0x1F51:01 = 0 (Stop program): gửi SDO response, rồi
- *      blc_boot_enter_bootloader().
+ *      blc_boot_enter_bootloader(). Ghi 0x1F51:01 = 1 (Start) trả OK, đọc
+ *      0x1F51:01 trả 1 (đang chạy) để master phân biệt app với bootloader.
  *   6. Identity 0x1000/0x1018 lấy từ blc_identity.h.
  */
 #include "blc/blc_boot.h"
@@ -57,7 +58,19 @@ uint32_t app_od_write_1F51(uint8_t value)
         s_enter_bl_pending = 1;    /* reset SAU KHI stack đã gửi SDO response */
         return 0u;
     }
-    return 0x08000022u;            /* app không xử lý Start/Clear */
+    if (value == 1u) {
+        /* Start program: app đang chạy rồi -> OK. Master gửi lại Start khi mất
+         * response của bootloader (bootloader đã reset sang app) sẽ không bị
+         * báo nạp lỗi. */
+        return 0u;
+    }
+    return 0x08000022u;            /* Clear/Reset: phải Stop về bootloader trước */
+}
+
+/* Đọc 0x1F51:01: 1 = program started. Bootloader trả 0 (có app) hoặc 3 (không có app). */
+uint8_t app_od_read_1F51(void)
+{
+    return 1u;
 }
 
 /* Gọi trong main loop, sau khi stack CANopen đã xử lý/gửi xong frame. */

@@ -204,6 +204,15 @@ static void flashed_ok(const blob_t *b)
     for (uint32_t i = 0; (BLC_APP_START + n + i) % 8; i++) CHECK_EQ(after[i], 0xFF);
 }
 
+static bool page_blank(uint32_t addr)
+{
+    const uint8_t *p = (const uint8_t *)(uintptr_t)(addr & ~(BLC_FLASH_PAGE_SIZE - 1u));
+    for (uint32_t i = 0; i < BLC_FLASH_PAGE_SIZE; i++) {
+        if (p[i] != 0xFF) return false;
+    }
+    return true;
+}
+
 static void test_od(void)
 {
     uint32_t v;
@@ -265,10 +274,19 @@ static void test_download_flow(void)
     CHECK(g_od_reset_request);
     g_od_reset_request = false;
 
-    /* Clear xóa cả valid flag */
+    /* Clear (lazy) chỉ xóa page đầu: header/vector mất nên app cũ hết hiệu lực
+     * ngay, dù valid flag cũ vẫn còn ở page sau */
+    g_fake_erase_count = 0;
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
-    CHECK_EQ(flag_at(&v1), UINT64_MAX);
-    CHECK(image_check_boot(0) != IMG_OK);
+    CHECK_EQ(g_fake_erase_count, 1);
+    CHECK(page_blank(BLC_APP_START));
+    CHECK_EQ(image_check_boot(0), IMG_BAD_HEADER);
+    CHECK_EQ(sdo_read(0x1F51, 1, &v), SDO_OK);
+    CHECK_EQ(v, PROG_STATUS_NO_PROGRAM);
+    /* Clear lần nữa: page đầu đã trống thì không xóa lại */
+    g_fake_erase_count = 0;
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    CHECK_EQ(g_fake_erase_count, 0);
 
     /* CRC sai -> Start bị abort, không có flag */
     CHECK_EQ(block_write(0x1F50, 1, bad.data, bad.len, 0, 0), SDO_OK);
@@ -317,6 +335,7 @@ static void test_download_flow(void)
     program_init(true, true, blc_secver_min());
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(block_write(0x1F50, 1, v3.data, v3.len, 0, 0), SDO_ABORT_DATA_STORE);
+    CHECK_EQ(*(const uint32_t *)(uintptr_t)BLC_APP_HEADER_ADDR, 0xFFFFFFFFu); /* magic không được ghi */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(segmented_write(0x1F50, 1, v1.data, v1.len), SDO_ABORT_DATA_STORE);
@@ -329,6 +348,65 @@ static void test_download_flow(void)
     CHECK_EQ(image_check_boot(blc_secver_min()), IMG_OK);
 
     free(v1.data); free(v2.data); free(v3.data); free(bad.data); free(wrong.data);
+}
+
+/* Vùng app còn dữ liệu cũ (firmware trước) ở các page sau page đầu. */
+static void fill_old_firmware(void)
+{
+    for (uint32_t a = BLC_APP_START; a < BLC_FLASH_BASE + FAKE_FLASH_SIZE; a += 8) {
+        fake_flash_poke(a, 0x0123456789ABCDEFull ^ a);
+    }
+}
+
+static void test_lazy_erase(void)
+{
+    blob_t v1 = load("v1.blcimg");
+    uint32_t flag = blc_app_flag_addr(img_size(&v1));
+    uint32_t pages = (img_size(&v1) + 4 + BLC_FLASH_PAGE_SIZE - 1) / BLC_FLASH_PAGE_SIZE;
+
+    /* Nạp đè lên firmware cũ: chỉ xóa đúng các page image dùng */
+    fake_flash_reset();
+    fill_old_firmware();
+    program_init(true, false, 0);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    CHECK_EQ(g_fake_erase_count, 1);
+    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_OK);
+    CHECK(g_fake_erase_count >= pages && g_fake_erase_count <= pages + 1); /* + page flag nếu tách riêng */
+    flashed_ok(&v1);
+    CHECK_EQ(flag_at(&v1), UINT64_MAX);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
+    g_od_reset_request = false;
+    CHECK_EQ(image_check_boot(0), IMG_OK);
+    CHECK(!page_blank(flag + BLC_FLASH_PAGE_SIZE)); /* page sau image không bị xóa */
+
+    /* Flag "APPVALID" cũ nằm đúng FLAG_ADDR của image mới (nạp lại image cùng
+     * kích thước). Magic chỉ được ghi sau khi page chứa flag đã xóa, nên nạp
+     * dở + reset không bao giờ để lại header hợp lệ đi kèm flag cũ. */
+    fake_flash_reset();
+    fill_old_firmware();
+    fake_flash_poke(flag, BLC_APP_VALID_FLAG);
+    program_init(true, false, 0);
+    CHECK_EQ(program_control(PROG_CTRL_CLEAR, &(bool){false}), SDO_OK);
+    CHECK_EQ(program_dl_begin(true, v1.len), SDO_OK);
+    CHECK_EQ(program_dl_data(v1.data, 0x21B), SDO_OK); /* thiếu 1 byte header */
+    CHECK_EQ(*(const uint32_t *)(uintptr_t)BLC_APP_HEADER_ADDR, 0xFFFFFFFFu);
+    CHECK_EQ(flag_at(&v1), BLC_APP_VALID_FLAG);
+    CHECK_EQ(program_dl_data(v1.data + 0x21B, 1), SDO_OK); /* đủ header */
+    CHECK_EQ(flag_at(&v1), UINT64_MAX);
+    CHECK_EQ(*(const uint32_t *)(uintptr_t)BLC_APP_HEADER_ADDR, BLC_APP_HEADER_MAGIC);
+    CHECK_EQ(program_dl_data(v1.data + 0x21C, 0x2000), SDO_OK);
+    program_dl_abort(); /* mất điện / master hủy giữa chừng */
+    CHECK(image_check_boot(0) != IMG_OK);
+
+    /* Hủy giữa chừng rồi nạp lại từ đầu */
+    CHECK_EQ(program_dl_begin(true, v1.len), SDO_ABORT_DEVICE_STATE);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    CHECK_EQ(segmented_write(0x1F50, 1, v1.data, v1.len), SDO_OK);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
+    g_od_reset_request = false;
+    CHECK_EQ(image_check_boot(0), IMG_OK);
+
+    free(v1.data);
 }
 
 static void test_otp_full(void)
@@ -381,6 +459,7 @@ int main(int argc, char **argv)
 
     test_od();
     test_download_flow();
+    test_lazy_erase();
     test_otp_full();
     test_timeout();
     TEST_DONE();

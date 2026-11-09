@@ -1,5 +1,5 @@
 /**
- * Bootloader CANopen cho STM32G4 (xem bootloader/design.md).
+ * Bootloader CANopen cho STM32G4 (xem docs/design.md).
  *
  * Luồng khởi động:
  *   1. Đọc magic trong backup register (app yêu cầu ở lại bootloader).

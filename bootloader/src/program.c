@@ -34,6 +34,8 @@ static struct {
     bool hdr_known;
     uint8_t hdr[sizeof(blc_app_header_t)];
     uint8_t dw[8];
+    uint8_t magic_dw[8];   /* double-word chứa magic, chỉ ghi sau khi header đạt */
+    uint32_t erased_end;   /* [APP_START, erased_end) đã xóa trong lần nạp này */
     uint8_t sig[SIG_MAX];
     uint32_t received;     /* tổng byte khi kết thúc transfer */
 } P;
@@ -65,19 +67,41 @@ static bool page_is_blank(uint32_t addr)
     return blc_flash_ecc_events() == ecc;
 }
 
+/* Xóa page chứa addr nếu chưa trống, rồi kiểm tra lại. */
+static bool erase_if_dirty(uint32_t addr)
+{
+    uint32_t page = addr & ~(BLC_FLASH_PAGE_SIZE - 1u);
+    watchdog_kick();
+    return page_is_blank(page) || (blc_flash_erase_page(page) && page_is_blank(page));
+}
+
+/* Xóa lazy: Clear chỉ xóa page đầu (vector table + header), nên app cũ mất
+ * hiệu lực ngay và lệnh trả lời trong ~1 lần xóa page. Các page sau được xóa
+ * khi stream chạm tới (ensure_erased), page chứa valid flag được xóa ngay khi
+ * nhận đủ header (on_header_complete). */
 static uint32_t do_clear(void)
 {
     P.app_valid = false;
     P.state = ST_DIRTY;
-    /* Chỉ xóa page chưa trống để rút ngắn thời gian (mỗi page ~22 ms). */
-    for (uint32_t a = BLC_APP_START; a < blc_layout_app_end(); a += BLC_FLASH_PAGE_SIZE) {
-        watchdog_kick();
-        if (!page_is_blank(a) && (!blc_flash_erase_page(a) || !page_is_blank(a))) {
-            return SDO_ABORT_HW_ERROR;
-        }
+    if (!erase_if_dirty(BLC_APP_START)) {
+        return SDO_ABORT_HW_ERROR;
     }
+    P.erased_end = BLC_APP_START + BLC_FLASH_PAGE_SIZE;
     P.state = ST_CLEARED;
     return SDO_OK;
+}
+
+/* Đảm bảo mọi page tới (và gồm) page chứa addr đã được xóa. Stream đi tuần tự
+ * nên mỗi block/segment chạm tối đa 1 page mới (~22–40 ms). */
+static bool ensure_erased(uint32_t addr)
+{
+    while (P.erased_end <= addr) {
+        if (!erase_if_dirty(P.erased_end)) {
+            return false;
+        }
+        P.erased_end += BLC_FLASH_PAGE_SIZE;
+    }
+    return true;
 }
 
 /* ---- Start --------------------------------------------------------------- */
@@ -145,19 +169,31 @@ uint32_t program_dl_begin(bool size_known, uint32_t size)
     P.sig_len = 0;
     P.hdr_known = false;
     memset(P.dw, 0xFF, sizeof P.dw);
+    memset(P.magic_dw, 0xFF, sizeof P.magic_dw);
     P.state = ST_RECEIVING;
     return SDO_OK;
 }
 
-static bool flush_dw(uint32_t offset_of_dw)
+#define MAGIC_DW_OFFSET (BLC_APP_HEADER_OFFSET & ~7u)
+
+static bool program_dw(uint32_t addr, const uint8_t b[8])
 {
     uint64_t v;
-    memcpy(&v, P.dw, sizeof v);
-    memset(P.dw, 0xFF, sizeof P.dw);
-    if (v == UINT64_MAX) {
-        return true; /* đã trống sẵn */
+    memcpy(&v, b, sizeof v);
+    return v == UINT64_MAX || blc_flash_program_dw(addr, v); /* toàn FF: đã trống sẵn */
+}
+
+static bool flush_dw(uint32_t offset_of_dw)
+{
+    uint32_t addr = BLC_APP_START + offset_of_dw;
+    bool ok = ensure_erased(addr);
+    if (ok && offset_of_dw == MAGIC_DW_OFFSET && !P.hdr_known) {
+        memcpy(P.magic_dw, P.dw, sizeof P.dw); /* hoãn tới on_header_complete */
+    } else if (ok) {
+        ok = program_dw(addr, P.dw);
     }
-    return blc_flash_program_dw(BLC_APP_START + offset_of_dw, v);
+    memset(P.dw, 0xFF, sizeof P.dw);
+    return ok;
 }
 
 static uint32_t on_header_complete(void)
@@ -167,6 +203,17 @@ static uint32_t on_header_complete(void)
     blc_hdr_result_t r = blc_app_header_check(&h, blc_layout_app_end(), P.sec_min);
     if (r != BLC_HDR_OK) {
         return SDO_ABORT_DATA_STORE;
+    }
+    /* Page chứa FLAG_ADDR có thể còn "APPVALID" của một image cũ (xóa lazy
+     * không động tới phần sau image cũ). Xóa nó TRƯỚC khi ghi magic: nếu ghi
+     * magic trước, mất điện lúc này sẽ để lại header hợp lệ + flag cũ, và
+     * CRC32 (tuyến tính) dễ bị giả để boot code chưa verify chữ ký. */
+    uint32_t flag = blc_app_flag_addr(h.image_size);
+    if (flag >= P.erased_end && !erase_if_dirty(flag)) {
+        return SDO_ABORT_HW_ERROR;
+    }
+    if (!program_dw(BLC_APP_START + MAGIC_DW_OFFSET, P.magic_dw)) {
+        return SDO_ABORT_HW_ERROR;
     }
     P.flash_len = h.image_size + 4u;
     P.sig_len = blc_sig_len(h.sig_algo);
