@@ -40,7 +40,7 @@ Mỗi vùng phải nằm trọn trong các page riêng, nên phân vùng phụ t
 2. App chờ tới khi SDO response đã thực sự ra bus (TX FIFO của FDCAN rỗng), rồi ghi một giá trị magic vào backup register (`TAMP_BKPxR`) và gọi `NVIC_SystemReset()`. Reset sớm hơn thì response bị mất.
 3. Bootloader khởi động và đọc backup register:
    - **Có magic:** xóa magic, ở lại bootloader và gửi boot-up message (`0x700 + NodeID`, data `0x00`).
-   - **Không có magic:** kiểm tra app hợp lệ (mục 5). Nếu hợp lệ thì jump sang app, nếu không thì ở lại bootloader.
+   - **Không có magic:** kiểm tra app hợp lệ (mục 5). Nếu không hợp lệ thì ở lại bootloader. Nếu hợp lệ thì mở cửa sổ cứu node (mục 3.1): bắt được lệnh Stop thì ở lại bootloader, hết cửa sổ thì dọn ngoại vi đã dùng rồi jump sang app.
 
 ```mermaid
 flowchart TD
@@ -51,7 +51,11 @@ flowchart TD
     MAGIC -- có --> CLR["Xóa magic"]
     CLR --> STAY["Ở lại bootloader<br/>gửi boot-up: 0x700 + NodeID, data 0x00"]
     MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
-    CHK -- có --> JMP([Jump sang app])
+    CHK -- có --> WIN["Cửa sổ cứu node: bật FDCAN,<br/>chỉ nghe trong T ms (mục 3.1)"]
+    WIN --> GOT{"Nhận Stop<br/>gửi tới NodeID mình?"}
+    GOT -- có --> STAY
+    GOT -- "hết T ms" --> CLEAN["Đưa mọi ngoại vi đã dùng<br/>về trạng thái reset"]
+    CLEAN --> JMP([Jump sang app])
     CHK -- không --> STAY
     STAY --> WAIT(["Chờ lệnh nạp từ master (mục 4)"])
 ```
@@ -67,11 +71,104 @@ flowchart TD
 | Ghi `3` (Clear) | SDO abort `0x08000022`. Phải Stop về bootloader trước |
 | Đọc | `1` (program started). Bootloader trả `0` hoặc `3` (mục 4.1), nên master phân biệt được node đang ở app hay bootloader. `0x1018` không dùng được cho việc này vì identity của hai bên giống hệt nhau |
 
+### 3.1 Cửa sổ cứu node
+
+Nếu chỉ có cơ chế ở trên thì app phải tự xử lý Stop thì node mới về được bootloader. App vẫn hợp lệ (đúng CRC, có valid flag) nhưng bị treo, CAN không chạy, hoặc không xử lý `0x1F51` thì không cứu được qua CAN nữa. Khi chip ở RDP1, debugger cũng không cứu được, vì xóa flash hay ghi backup register đều bị chặn. Lối ra duy nhất còn lại là hạ RDP, mà việc đó sẽ mass erase cả bootloader.
+
+Cửa sổ cứu node bịt lỗ hổng này: chỉ cần reset được node (tắt bật nguồn, watchdog, NMT `0x81`) trong lúc master gửi Stop liên tục (mục 4.4) là node ở lại bootloader, dù app hỏng kiểu gì.
+
+**Luồng boot đầy đủ:**
+
+```mermaid
+flowchart TD
+    RST([Bootloader khởi động]) --> MAGIC{"Backup register<br/>có magic?"}
+    MAGIC -- có --> CLR["Xóa magic"]
+    MAGIC -- không --> CLK
+    CLR --> CLK["Lên 150 MHz (PLL từ HSI16), SysTick 1 ms"]
+    CLK --> CFG["Đọc config: NodeID, bitrate (mục 6)"]
+    CFG --> HAS{"Có magic?"}
+    HAS -- có --> CAN
+    HAS -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    CHK -- không --> CAN
+    CHK -- có --> OFF{"T_min = 0<br/>(tắt lúc build)?"}
+
+    subgraph WINDOW["Cửa sổ cứu node: chỉ nghe, không gửi gì"]
+        direction TB
+        OFF -- không --> CANW["Bật HSE và FDCAN<br/>(giống nhánh ở lại)"]
+        CANW --> T0["Bắt đầu đếm T = max(T_min, 6 × t_frame)"]
+        T0 --> RX{"Nhận frame?"}
+        RX -- "Stop 0x1F51:01 = 0<br/>tới NodeID mình" --> CAUGHT["Giữ lại frame Stop,<br/>FDCAN vẫn chạy"]
+        RX -- "frame khác:<br/>bỏ qua, không kéo dài T" --> TMO{"Hết T?"}
+        RX -- không có --> TMO
+        TMO -- chưa --> RX
+        TMO -- hết --> DEINIT["Tắt FDCAN"]
+    end
+
+    OFF -- có --> CLEAN
+    DEINIT --> CLEAN["Đưa mọi thứ đã dùng về trạng thái reset,<br/>kể cả clock về HSI16 (bảng dọn dẹp bên dưới)"]
+    CLEAN --> JMP([Jump sang app])
+
+    CAN["Bật HSE (chờ tối đa 10 ms) và FDCAN<br/>(bitrate config, không chia được thì mặc định)"] --> CO
+    CAUGHT --> CO["Init CANopen, gửi boot-up<br/>0x700 + NodeID, data 0x00"]
+    CO --> REPLY{"Đến từ cửa sổ?"}
+    REPLY -- có --> OK["Xử lý frame Stop đã giữ:<br/>trả OK (đã ở bootloader, mục 4.1)"]
+    REPLY -- không --> WAIT
+    OK --> WAIT(["Chờ lệnh nạp từ master (mục 4)"])
+```
+
+**Hành vi trong cửa sổ:**
+- Cửa sổ chỉ mở ở nhánh "không có magic, app hợp lệ", ngay trước khi jump. Khi có magic hoặc app không hợp lệ thì không có cửa sổ, luồng giữ nguyên.
+- Bootloader đọc NodeID và bitrate từ config (mục 6) giống nhánh ở lại, rồi bật FDCAN ở chế độ normal.
+- Bootloader **không gửi gì**: không boot-up, không heartbeat. FDCAN vẫn ACK frame như mọi node khác. Nhìn từ bus, một lần boot bình thường vẫn chỉ có một boot-up, là của app.
+- Chỉ chấp nhận một loại frame: SDO request (`0x600 + NodeID`, DLC 8), expedited download ghi `0x1F51:01 = 0`. Byte lệnh là `0x2F` (báo kích thước 1 byte) hoặc `0x22` (không báo kích thước), byte data đầu tiên bằng `0`. Đó đúng là các lệnh Stop mà SDO server của bootloader trả OK (mục 4.1). Các biến thể `0x2B`, `0x27`, `0x23` thì server và app theo chuẩn đều trả abort vì sai kích thước, nên cửa sổ cũng không nhận.
+- Frame khác (NMT, SDO khác) bị bỏ qua và **không kéo dài cửa sổ**, để traffic bình thường trên bus không giữ node lại.
+- **Bắt được Stop:** clock và FDCAN trong cửa sổ đã giống hệt nhánh ở lại, nên giữ nguyên FDCAN, chỉ init CANopen và gửi boot-up. Sau đó xử lý lệnh Stop vừa bắt được như một request bình thường, tức chỉ trả OK vì đã ở bootloader (mục 4.1).
+- **Hết cửa sổ:** đưa mọi ngoại vi đã dùng về trạng thái reset (bảng dưới) rồi jump sang app.
+
+**Độ dài cửa sổ T:**
+- `T = max(T_min, 6 × t_frame)`. Trong đó `T_min = 20 ms`, còn `t_frame` là thời gian truyền một frame SDO dài nhất (135 bit, đã tính bit stuffing) ở bitrate đang dùng.
+- Từ 50 kbit/s trở lên thì T = 20 ms. Ở 20 kbit/s T khoảng 41 ms, ở 10 kbit/s khoảng 81 ms.
+- T tính từ lúc FDCAN bắt đầu tham gia bus (thoát chế độ init), không gồm thời gian khởi động clock.
+- Master bắt được cửa sổ khi chu kỳ gửi Stop `P` thỏa `P + t_frame < T` (mục 4.4).
+
+**Clock:**
+- Bootloader lên 150 MHz (PLL từ HSI16) ngay khi khởi động, ở mọi nhánh. Chỉ có một cấu hình clock, nên cửa sổ và nhánh ở lại dùng chung clock và FDCAN: bắt được Stop thì không phải làm lại gì. Kiểm tra CRC lúc boot cũng nhanh hơn.
+- FDCAN lấy clock từ HSE. HSI16 sai số tới ±1%, vượt dung sai bit timing của CAN (cỡ ±0.5% với điểm lấy mẫu 87.5%), nên chỉ dùng PCLK1 khi HSE không lên. HSE 8 MHz chia được mọi bitrate trong bảng CiA 305. PCLK1 150 MHz không chia được 800 kbit/s; khi đó dùng bitrate mặc định như nhánh ở lại.
+- HSE chỉ bật khi cần FDCAN (cửa sổ hoặc nhánh ở lại). Chờ HSE có giới hạn thời gian ngắn (mặc định 10 ms), vì cửa sổ chạy ở mọi lần boot, nên board không có thạch anh cũng không được chờ lâu.
+- Đổi lại, trước khi jump phải hạ clock về đúng trạng thái reset (bảng dưới).
+
+**Dọn dẹp trước khi jump:** mọi thứ bootloader đã bật trên đường boot phải về đúng trạng thái reset, để app nhận chip giống như lúc vừa power-on.
+
+| Đã dùng | Đưa về |
+|---|---|
+| FDCAN | Reset qua RCC, tắt clock. Tắt ngắt, xóa pending, priority về 0 |
+| GPIO của CAN (RX, TX, chân STBY nếu có) | Reset port qua RCC, tắt clock port |
+| Nguồn clock của FDCAN | Giá trị reset (HSE) |
+| HSE | Tắt, chờ tắt hẳn, bỏ bypass |
+| SysTick | Tắt, xóa bộ đếm, priority về 0, xóa pending |
+| SYSCLK | Chuyển về HSI16, chờ chuyển xong. Prescaler AHB/APB về `/1` |
+| Flash | Latency về 0 WS, tắt prefetch. Cache giữ bật như giá trị reset. Khóa lại sau mỗi lần ghi hoặc xóa (config có thể được sửa khi đọc, mục 6.3) |
+| PLL | Tắt, chờ tắt hẳn, cấu hình PLL về giá trị reset |
+| PWR, SYSCFG | Tắt clock. Voltage scaling để nguyên range 1, vốn là giá trị reset |
+| NVIC | Tắt mọi ngắt, xóa mọi pending |
+| CRC | Reset qua RCC, tắt clock |
+| Backup domain | Đóng lại ngay sau khi đọc magic |
+
+- **Thứ tự hạ clock:** chuyển SYSCLK về HSI16 trước, rồi mới hạ flash latency và tắt PLL. Hạ latency khi còn chạy 150 MHz thì CPU đọc flash sai.
+- Thêm ngoại vi nào vào đường boot thì phải thêm vào bảng này.
+- Reset FDCAN không xóa message RAM. Nội dung message RAM sau power-on vốn cũng không xác định, nên app không được dựa vào nó.
+
+**Bật/tắt:** `T_min` cố định lúc build. `T_min = 0` thì tắt hẳn cửa sổ: không bật HSE hay FDCAN, kiểm tra app xong là dọn clock rồi jump ngay. `T_min` **không** đặt trong config page, vì app ghi được config: một app hỏng hoặc bị chiếm quyền chỉ cần ghi tắt cửa sổ là mất đúng đường cứu mà cửa sổ phải đảm bảo.
+
+**Bảo mật:** không tệ hơn khi chưa có cửa sổ. Ai trên bus cũng đã gửi Stop cho app được, và image nạp vào vẫn phải có chữ ký. Cái mới duy nhất là giữ được node ở bootloader cả khi app đang chặn Stop, tức chỉ gây được DoS.
+
+**Cái giá:** mỗi lần boot chậm thêm thời gian khởi động HSE, init FDCAN và T ms chờ. Đường boot nào cũng phải lên PLL rồi hạ về, nên bước hạ clock cần test riêng.
+
 ## 4. Quy trình nạp firmware (CiA 302-3)
 
 | Bước | Master (PC) | Bootloader / App |
 |---|---|---|
-| 1 | Gửi **Stop program**: `0x1F51:01 = 0` | Nếu đang ở App thì chuyển về bootloader (mục 3) |
+| 1 | Gửi **Stop program**: `0x1F51:01 = 0`. App không phản hồi thì cứu node (mục 4.4) | Nếu đang ở App thì chuyển về bootloader (mục 3) |
 | 2 | Chờ boot-up message từ node. Không thấy thì poll `0x1F51:01` (mục 4.2) | Bootloader gửi boot-up |
 | 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa page đầu (vector table + header) để app cũ hết hiệu lực. Các page sau xóa dần khi nhận image (xóa lazy) |
 | 4 | Tải image vào `0x1F50:01` bằng **SDO block transfer** | Nhận dữ liệu và ghi vào flash |
@@ -113,7 +210,7 @@ sequenceDiagram
         B->>F: Ghi entry OTP nếu security_version > SEC_MIN (mục 5.6)
         B-->>M: SDO response
         B->>B: NVIC_SystemReset()
-        Note over B: Boot bình thường: không có magic, app hợp lệ (mục 3)
+        Note over B: Boot bình thường: không có magic, app hợp lệ, hết cửa sổ (mục 3)
         B->>A: Jump sang app
     else Sai
         B-->>M: SDO abort, ở lại bootloader
@@ -156,6 +253,7 @@ Mọi lệnh trong quy trình đều gửi lại được (idempotent). Khi mấ
 
 | Sự cố | Trạng thái node | Master làm gì |
 |---|---|---|
+| App không phản hồi Stop (treo, CAN không chạy, không xử lý `0x1F51`) | Ở app | Cứu node (mục 4.4) |
 | Mất response của Stop | Đã ở bootloader | Gửi lại Stop (bootloader trả OK) hoặc đọc `0x1F51:01` |
 | Mất boot-up | Ở bootloader, heartbeat mặc định tắt | Poll đọc `0x1F51:01` tới khi ra `0`/`3`. Muốn nhận lại boot-up thì gửi NMT `0x82` (Reset Communication) |
 | Timeout ở Clear | Đã hoặc đang xóa page đầu | Gửi lại Clear. Page đã trống thì không xóa lại |
@@ -164,7 +262,7 @@ Mọi lệnh trong quy trình đều gửi lại được (idempotent). Khi mấ
 | Mất abort của Start | Bootloader, nạp hỏng | Gửi lại Start sẽ nhận `0x08000022`. Clear rồi nạp lại |
 
 - Bootloader chỉ gửi boot-up **một lần**, nên master không được coi boot-up là điều kiện bắt buộc. Nên chờ boot-up một khoảng ngắn, nếu không thấy thì chuyển sang poll.
-- **Không dùng NMT `0x81` (Reset Node) để khôi phục** khi đang ở bootloader. Magic đã bị xóa từ lần boot trước, nên nếu app cũ còn hợp lệ (chưa Clear) thì node sẽ nhảy về app.
+- **Chỉ gửi NMT `0x81` (Reset Node) riêng lẻ khi muốn node về app.** Magic đã bị xóa từ lần boot trước, nên nếu app cũ còn hợp lệ (chưa Clear) thì hết cửa sổ node sẽ nhảy về app. Dùng `0x81` kèm gửi Stop liên tục (mục 4.4) thì node mới ở lại bootloader.
 - Trong lúc một transfer `0x1F50` đang dở, nếu quá 2 s không nhận được frame nào thì bootloader tự abort (`0x05040000`) và coi như nạp hỏng.
 - Lệnh Start thường lâu hơn các lệnh khác, vì phải tính SHA-256 trên toàn bộ image và verify RSA (mục 5.5). Master nên đặt timeout riêng cho Start, dài hơn timeout mặc định.
 
@@ -183,6 +281,37 @@ Master hủy được ở bất kỳ bước nào để nạp image khác:
 
 - Sau khi hủy, node coi như nạp hỏng: phải Clear thì mới nạp lại được.
 - Sau Clear thì không quay về app cũ được, vì chỉ có một vùng app, không có bản sao lưu. Mất điện lúc này thì node vẫn đứng ở bootloader (không có app hợp lệ), nên luôn nạp lại được.
+
+### 4.4 Cứu node
+
+Master dùng thao tác này khi app không phản hồi Stop. Nó cũng dùng được khi app còn chạy tốt (app nhận Stop thì tự về bootloader như mục 3), nên master có thể luôn bắt đầu nạp theo cách này mà không phải phân biệt hai trường hợp.
+
+1. Gửi Stop (`0x1F51:01 = 0`, byte lệnh `0x2F`) đều đặn, chu kỳ `P` thỏa `P + t_frame < T` (mục 3.1). Mặc định T = 20 ms, P = 5 ms. Ở 20 kbit/s và 10 kbit/s chọn P lớn hơn nhưng vẫn thỏa điều kiện, ví dụ P = 20 ms.
+2. Reset node bằng bất cứ cách nào có được: tắt bật nguồn, chờ watchdog, hoặc NMT `0x81` nếu app còn xử lý NMT.
+3. Khi thấy boot-up hoặc SDO response OK cho Stop thì ngừng gửi Stop và bỏ các Stop còn trong hàng đợi TX của adapter. Mỗi Stop đã ra bus đều được trả OK, nên master bỏ qua các response thừa.
+4. Xác nhận node đã ở bootloader bằng đọc `0x1F51:01` (`0` hoặc `3`, mục 4.1), rồi nạp tiếp từ bước Clear (mục 4).
+
+```mermaid
+sequenceDiagram
+    participant M as Master
+    participant B as Bootloader
+    loop mỗi P ms (P + t_frame < T)
+        M->>B: Stop (0x1F51:01 = 0)
+    end
+    Note over B: Node được reset<br/>(tắt bật nguồn / watchdog / NMT 0x81)
+    Note over B: Không magic, app hợp lệ → mở cửa sổ (mục 3.1)
+    M->>B: Stop
+    B->>M: Boot-up (0x700 + NodeID, 0x00)
+    B->>M: SDO response OK
+    Note over M: Ngừng gửi Stop, đọc 0x1F51:01,<br/>nạp tiếp từ bước Clear (mục 4)
+```
+
+**Vì sao cửa sổ ngắn vẫn bắt được Stop:**
+- **Bus chỉ có master và node:** lúc node đang reset thì không ai ACK frame Stop, nên adapter của master tự gửi lại liên tục (hành vi mặc định của CAN). Bootloader vừa tham gia bus là thấy frame đó ngay.
+- **Bus có nhiều node:** node khác ACK frame Stop nên master không tự gửi lại. Khi đó chỉ còn dựa vào việc master gửi đều đặn với chu kỳ P.
+- Một số adapter chạy chế độ one-shot (không tự gửi lại), nên master **luôn** phải gửi Stop đều đặn, không dựa vào việc tự gửi lại.
+
+**Tải bus:** gửi Stop mỗi 5 ms chiếm khoảng 20% bus ở 125 kbit/s và 10% ở 250 kbit/s. Chỉ gửi trong lúc cứu node và ngừng ngay khi node đã về bootloader.
 
 ## 5. Định dạng image và kiểm tra hợp lệ
 
@@ -287,7 +416,7 @@ Bootloader nhận stream liên tục và chia theo offset:
 4. Verify chữ ký trong buffer RAM theo `sig_algo`, tính trên dữ liệu **đọc lại từ flash** (`[APP_START, APP_START + image_size + 4)`). Như vậy là xác thực đúng những gì đã thực sự ghi vào flash. Public key lưu trong bootloader.
 5. Cả 4 bước đều đạt thì ghi valid flag tại `FLAG_ADDR`.
 6. Nếu `security_version > SEC_MIN` thì ghi entry mới vào OTP (mục 5.6).
-7. Trả SDO response cho Start program rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới) rồi jump sang app. Không jump thẳng, để app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
+7. Trả SDO response cho Start program rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới), mở cửa sổ cứu node (mục 3.1) rồi mới jump sang app. Không jump thẳng từ lúc đang chạy CANopen: đường boot bình thường chỉ dùng một tập ngoại vi nhỏ và có danh sách dọn dẹp rõ ràng (mục 3.1), nên app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
 
 **Mỗi lần boot bình thường:** chạy lại bước 1–2 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Bước 3 gồm hai điều kiện: `image_crc` đúng và valid flag tại `FLAG_ADDR` bằng `APPVALID`. Valid flag thay cho bước 4, nên không verify lại chữ ký.
 
@@ -395,3 +524,7 @@ Chỉ dùng 1 page để tiết kiệm flash. Như vậy chấp nhận rủi ro 
 - [ ] Giá trị mặc định của NodeID và bitrate (mục 6.4).
 - [x] Có hỗ trợ `0x1F56` (software identification) và `0x1F57` (flash status) không → **Không**, chỉ hỗ trợ object bắt buộc (mục 4.1).
 - [x] Có cơ chế chống rollback không → **Có**, dùng `security_version` + bộ đếm trong OTP. `app_version` không bị hạn chế (mục 5.6).
+- [x] Cứu node khi app hợp lệ nhưng không phản hồi Stop → **Có**, cửa sổ chỉ nghe lúc boot, `T = max(20 ms, 6 × t_frame)`, SYSCLK lên 150 MHz ngay từ đầu, FDCAN chạy từ HSE (mục 3.1, 4.4).
+- [x] Bật/tắt cửa sổ → cố định lúc build (`T_min = 0` để tắt), không đặt trong config (mục 3.1).
+- [x] Lệnh Stop nào được nhận trong cửa sổ → byte lệnh `0x2F` và `0x22`, giống SDO server của bootloader (mục 3.1).
+- [ ] Đo thời gian boot thêm (khởi động HSE, init FDCAN) trên board thật.

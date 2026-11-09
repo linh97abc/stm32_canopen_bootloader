@@ -139,6 +139,19 @@ bool fdcan_init(uint32_t kernel_hz, uint32_t bitrate, uint8_t node_id)
     return wait_cccr(FDCAN_CCCR_INIT, false);
 }
 
+/* Reset port GPIO của CAN (và STBY) qua RCC, tắt clock port. */
+static void gpio_deinit(void)
+{
+    uint32_t ports = BOARD_CAN_GPIO_CLK;
+#ifdef BOARD_CAN_STBY_GPIO
+    ports |= BOARD_CAN_STBY_GPIO_CLK;
+#endif
+    /* AHB2RSTR và AHB2ENR dùng cùng vị trí bit cho từng port GPIO. */
+    RCC->AHB2RSTR |= ports;
+    RCC->AHB2RSTR &= ~ports;
+    RCC->AHB2ENR &= ~ports;
+}
+
 void fdcan_deinit(void)
 {
     NVIC_DisableIRQ(FDCAN1_IT0_IRQn);
@@ -146,6 +159,8 @@ void fdcan_deinit(void)
     LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_FDCAN);
     LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_FDCAN);
     NVIC_ClearPendingIRQ(FDCAN1_IT0_IRQn);
+    NVIC_SetPriority(FDCAN1_IT0_IRQn, 0u);
+    gpio_deinit();
 }
 
 void FDCAN1_IT0_IRQHandler(void)

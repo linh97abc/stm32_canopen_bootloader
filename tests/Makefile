@@ -11,7 +11,7 @@ CFLAGS  := -std=c11 -g -O1 -Wall -Wextra -Wno-int-to-pointer-cast -Wno-pointer-t
 
 COMMON  := $(ROOT)/common/src/blc_config.c $(ROOT)/common/src/blc_crc.c \
            $(ROOT)/common/src/blc_app_header.c $(ROOT)/common/src/blc_secver.c fake_flash.c
-BL      := $(addprefix $(ROOT)/bootloader/src/, sdo.c od.c program.c image.c crypto/sha256.c crypto/rsa2048.c)
+BL      := $(addprefix $(ROOT)/bootloader/src/, sdo.c od.c program.c image.c rescue.c crypto/sha256.c crypto/rsa2048.c)
 # Header làm prerequisite: sửa .h (vd. blc_layout.h) thì test tự build lại.
 HDRS    := $(wildcard $(ROOT)/common/include/blc/*.h $(ROOT)/bootloader/src/*.h \
                       $(ROOT)/bootloader/src/crypto/*.h *.h)

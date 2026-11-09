@@ -5,12 +5,20 @@
 #include <stdint.h>
 
 #define BL_SYSCLK_HZ  150000000u
+#define BL_HSI_HZ     16000000u
 
-/** SYSCLK = 150 MHz (PLL từ HSI16), SysTick 1 ms, FDCAN clock từ HSE. */
+/** SYSCLK = 150 MHz (PLL từ HSI16), SysTick 1 ms. Chưa bật HSE. */
 void clock_init(void);
 
-/** Tần số kernel clock của FDCAN (HSE, hoặc PCLK1 nếu HSE không lên). */
-uint32_t clock_fdcan_hz(void);
+/** Bật HSE làm clock FDCAN (PCLK1 nếu HSE không lên). Gọi sau clock_init(). Trả về kernel clock. */
+uint32_t clock_fdcan_init(void);
+
+/**
+ * Trả mọi thứ clock_init()/clock_fdcan_init() đã đổi về trạng thái reset
+ * trước khi nhảy sang app: SysTick, HSE, nguồn clock FDCAN, SYSCLK = HSI16,
+ * flash latency, PLL, clock PWR/SYSCFG (docs/design.md mục 3.1).
+ */
+void clock_deinit(void);
 
 /** Bộ đếm ms từ SysTick. */
 uint32_t clock_ms(void);

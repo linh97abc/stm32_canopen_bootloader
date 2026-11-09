@@ -13,7 +13,7 @@ include ../common/blc_common.mk
 
 SRCS := \
     src/startup.c src/main.c src/clock.c src/fdcan.c src/canopen.c src/sdo.c \
-    src/od.c src/program.c src/image.c src/boot_jump.c src/crypto/sha256.c src/crypto/rsa2048.c \
+    src/od.c src/program.c src/image.c src/boot_jump.c src/rescue.c src/crypto/sha256.c src/crypto/rsa2048.c \
     $(BLC_COMMON_SRCS)
 
 GEN_PUBKEY := $(BUILD)/pubkey.c

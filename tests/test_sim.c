@@ -14,6 +14,7 @@
 #include "blc/blc_layout.h"
 #include "blc/blc_secver.h"
 #include "program.h"
+#include "rescue.h"
 #include "sdo.h"
 #include "sdo_abort.h"
 #include "test_util.h"
@@ -450,6 +451,97 @@ static void test_timeout(void)
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
 }
 
+/* ---- cửa sổ cứu node (design.md mục 3.1) --------------------------------- */
+
+typedef struct {
+    uint32_t at;
+    can_frame_t f;
+} sim_rx_t;
+extern sim_rx_t g_sim_rx[16];
+extern unsigned g_sim_rx_n, g_sim_rx_i;
+
+static can_frame_t sdo_frame(uint8_t node, uint8_t cmd, uint16_t idx, uint8_t sub, uint8_t v)
+{
+    can_frame_t f = {.id = (uint16_t)(0x600u + node), .dlc = 8,
+                     .data = {cmd, (uint8_t)idx, (uint8_t)(idx >> 8), sub, v, 0, 0, 0}};
+    return f;
+}
+
+static bool stop_ok(uint8_t node, uint8_t cmd, uint16_t idx, uint8_t sub, uint8_t v)
+{
+    can_frame_t f = sdo_frame(node, cmd, idx, sub, v);
+    return rescue_is_stop(&f, NODE);
+}
+
+static void rx_push(uint32_t at, can_frame_t f)
+{
+    g_sim_rx[g_sim_rx_n].at = at;
+    g_sim_rx[g_sim_rx_n].f = f;
+    g_sim_rx_n++;
+}
+
+static void test_rescue(void)
+{
+    /* T = max(20 ms, 6 × 135 bit). */
+    CHECK_EQ(rescue_window_ms(1000000), 20);
+    CHECK_EQ(rescue_window_ms(250000), 20);
+    CHECK_EQ(rescue_window_ms(50000), 20);
+    CHECK_EQ(rescue_window_ms(20000), 41);
+    CHECK_EQ(rescue_window_ms(10000), 81);
+
+    /* Chỉ nhận Stop tới đúng node, DLC 8. */
+    CHECK(stop_ok(NODE, 0x2F, 0x1F51, 1, 0));
+    CHECK(stop_ok(NODE, 0x22, 0x1F51, 1, 0));
+    CHECK(!stop_ok(NODE, 0x2F, 0x1F51, 1, 1));
+    CHECK(!stop_ok(NODE, 0x2F, 0x1F51, 2, 0));
+    CHECK(!stop_ok(NODE, 0x2F, 0x1F50, 1, 0));
+    CHECK(!stop_ok(NODE + 1, 0x2F, 0x1F51, 1, 0));
+    can_frame_t short_f = sdo_frame(NODE, 0x2F, 0x1F51, 1, 0);
+    short_f.dlc = 5;
+    CHECK(!rescue_is_stop(&short_f, NODE));
+    can_frame_t nmt = {.id = 0x000, .dlc = 2, .data = {0x81, NODE}};
+    CHECK(!rescue_is_stop(&nmt, NODE));
+
+    /* Cửa sổ nhận đúng những lệnh Stop mà SDO server trả OK, không hơn không kém. */
+    const uint8_t cmds[] = {0x2F, 0x2B, 0x27, 0x23, 0x22, 0x21, 0x20};
+    for (unsigned i = 0; i < sizeof cmds; i++) {
+        program_init(true, true, 0);
+        can_frame_t f = sdo_frame(NODE, cmds[i], 0x1F51, 1, 0);
+        g_sim_tx_n = 0;
+        sdo_handle(&f);
+        bool server_ok = g_sim_tx_n == 1u && g_sim_tx[0].data[0] == 0x60 &&
+                         (cmds[i] & 0x02u) != 0u; /* expedited, không phải initiate segmented */
+        sdo_reset();
+        CHECK_EQ(rescue_is_stop(&f, NODE), server_ok);
+    }
+
+    /* Không có Stop: hết đúng T, traffic khác không kéo dài cửa sổ. */
+    can_frame_t got;
+    g_sim_ms = 1000;
+    g_sim_rx_n = g_sim_rx_i = 0;
+    rx_push(1005, nmt);
+    rx_push(1010, sdo_frame(NODE, 0x40, 0x1F51, 1, 0));
+    rx_push(1018, sdo_frame(NODE + 1, 0x2F, 0x1F51, 1, 0));
+    CHECK(!rescue_wait(NODE, 20, &got));
+    CHECK(g_sim_ms - 1000 >= 20 && g_sim_ms - 1000 <= 22);
+    CHECK_EQ(g_sim_rx_i, 3);
+
+    /* Stop tới giữa cửa sổ, sau traffic khác: bắt được. */
+    g_sim_ms = 2000;
+    g_sim_rx_n = g_sim_rx_i = 0;
+    rx_push(2003, nmt);
+    rx_push(2015, sdo_frame(NODE, 0x22, 0x1F51, 1, 0));
+    CHECK(rescue_wait(NODE, 20, &got));
+    CHECK(got.data[0] == 0x22 && got.id == 0x600 + NODE);
+
+    /* Stop tới sau khi hết cửa sổ: không bắt. */
+    g_sim_ms = 3000;
+    g_sim_rx_n = g_sim_rx_i = 0;
+    rx_push(3025, sdo_frame(NODE, 0x2F, 0x1F51, 1, 0));
+    CHECK(!rescue_wait(NODE, 20, &got));
+    g_sim_rx_n = g_sim_rx_i = 0;
+}
+
 int main(int argc, char **argv)
 {
     s_dir = argc > 1 ? argv[1] : "build";
@@ -462,5 +554,6 @@ int main(int argc, char **argv)
     test_lazy_erase();
     test_otp_full();
     test_timeout();
+    test_rescue();
     TEST_DONE();
 }

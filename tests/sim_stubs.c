@@ -23,6 +23,24 @@ bool fdcan_tx(const can_frame_t *f)
 }
 bool fdcan_tx_idle(void) { return true; }
 
+/* RX giả: frame tới tại thời điểm .at (ms). Mỗi lần poll rỗng coi như trôi 1 ms. */
+typedef struct {
+    uint32_t at;
+    can_frame_t f;
+} sim_rx_t;
+sim_rx_t g_sim_rx[16];
+unsigned g_sim_rx_n, g_sim_rx_i;
+
+bool fdcan_rx(can_frame_t *f)
+{
+    if (g_sim_rx_i < g_sim_rx_n && g_sim_rx[g_sim_rx_i].at <= g_sim_ms) {
+        *f = g_sim_rx[g_sim_rx_i++].f;
+        return true;
+    }
+    g_sim_ms++;
+    return false;
+}
+
 uint32_t blc_identity_serial(void) { return 0x12345678u; }
 
 bool boot_vectors_ok(void)

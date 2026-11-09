@@ -104,6 +104,9 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 ## Quy trình nạp (master)
 
 1. `0x1F51:01 = 0` (Stop) → node reset vào bootloader và gửi boot-up.
+   App không phản hồi (treo, CAN chết): gửi Stop đều đặn mỗi P ms rồi reset node
+   (tắt bật nguồn, watchdog, NMT `0x81`). Bootloader nghe T ms trước khi nhảy sang
+   app (mặc định T = 20 ms, P = 5 ms); bắt được Stop thì ở lại (design.md mục 3.1, 4.4).
 2. `0x1F51:01 = 3` (Clear). Bootloader chỉ xóa page đầu (vector table + header)
    nên app cũ hết hiệu lực ngay và lệnh trả lời trong khoảng một lần xóa page
    (≤ ~40 ms). Các page sau được xóa dần khi nhận image.
@@ -188,5 +191,5 @@ chừng để nạp image khác).
 - Hằng số identity (`blc_identity.h`): device type, vendor ID, product code, revision.
 - `bootloader/src/board.h`: chân CAN, chân STBY của transceiver, tần số HSE (tạm 8 MHz).
 - Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–9 trên G431/G491, 0–4 trên G474) khi sản xuất.
-- Rủi ro: app hợp lệ nhưng không xử lý được Stop program thì không về được
-  bootloader qua CAN. Có thể cân nhắc thêm cửa sổ chờ ngắn lúc boot.
+- Cửa sổ cứu node: `BL_RESCUE_WINDOW_MIN_MS` (mặc định 20, `0` = tắt) và
+  `BOARD_HSE_TIMEOUT_MS` (mặc định 10). Cần đo thời gian boot thêm trên board thật.

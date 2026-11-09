@@ -29,7 +29,7 @@ bool fdcan_tx_idle(void);
 /** Gọi định kỳ: tự phục hồi khi bus-off. */
 void fdcan_poll(void);
 
-/** Dừng FDCAN, tắt ngắt và clock. */
+/** Đưa FDCAN và GPIO của CAN về trạng thái reset, tắt clock, tắt ngắt. */
 void fdcan_deinit(void);
 
 #endif

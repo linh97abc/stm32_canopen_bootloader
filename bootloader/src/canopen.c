@@ -58,19 +58,24 @@ static void handle_nmt(const can_frame_t *f)
     }
 }
 
+void co_handle(const can_frame_t *f)
+{
+    if (f->id == 0x000u) {
+        handle_nmt(f);
+    } else if (f->id == 0x600u + s_node && s_state != NMT_STATE_STOPPED) {
+        sdo_handle(f);
+    }
+    if (g_od_reset_request) {
+        wait_tx_then_reset(); /* đã gửi response cho Start program */
+    }
+}
+
 void co_process(void)
 {
     can_frame_t f;
     fdcan_poll();
     while (fdcan_rx(&f)) {
-        if (f.id == 0x000u) {
-            handle_nmt(&f);
-        } else if (f.id == 0x600u + s_node && s_state != NMT_STATE_STOPPED) {
-            sdo_handle(&f);
-        }
-        if (g_od_reset_request) {
-            wait_tx_then_reset(); /* đã gửi response cho Start program */
-        }
+        co_handle(&f);
     }
 
     uint32_t now = clock_ms();

@@ -17,6 +17,10 @@
 #ifndef BOARD_HSE_BYPASS
 #define BOARD_HSE_BYPASS        0       /* 1 = nguồn clock ngoài thay cho thạch anh */
 #endif
+/* Chờ HSE tối đa (ms). Chạy ở mọi lần boot (cửa sổ cứu node), nên giữ ngắn. */
+#ifndef BOARD_HSE_TIMEOUT_MS
+#define BOARD_HSE_TIMEOUT_MS    10u
+#endif
 
 /* FDCAN1: mặc định PA11 = RX, PA12 = TX (AF9). */
 #ifndef BOARD_CAN_GPIO
