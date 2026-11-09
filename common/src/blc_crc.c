@@ -2,13 +2,17 @@
 
 uint8_t blc_crc8(const void *data, size_t len)
 {
+    /* T[i] = i nhân không nhớ với 0x07 (i < 16, không cần rút gọn) */
+    static const uint8_t T[16] = {
+        0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15,
+        0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
+    };
     const uint8_t *p = (const uint8_t *)data;
     uint8_t crc = 0x00u;
     while (len--) {
         crc ^= *p++;
-        for (int i = 0; i < 8; i++) {
-            crc = (uint8_t)((crc & 0x80u) ? ((unsigned)(crc << 1) ^ 0x07u) : (unsigned)(crc << 1));
-        }
+        crc = (uint8_t)((uint8_t)(crc << 4) ^ T[crc >> 4]);
+        crc = (uint8_t)((uint8_t)(crc << 4) ^ T[crc >> 4]);
     }
     return (uint8_t)(crc ^ 0x55u);
 }
