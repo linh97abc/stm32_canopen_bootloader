@@ -98,13 +98,14 @@ flowchart TD
     CLRG --> CHKG{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
     CHKG -- không --> CAN
     CHKG -- có --> CLEAN
-    MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    MAGIC -- không --> HSE0["Bật HSE, không chờ<br/>(nếu T_min ≠ 0)"]
+    HSE0 --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
     CHK -- không --> CAN
     CHK -- có --> OFF{"T_min = 0<br/>(tắt lúc build)?"}
 
     subgraph WINDOW["Cửa sổ cứu node: chỉ nghe, không gửi gì"]
         direction TB
-        OFF -- không --> CANW["Bật HSE và FDCAN<br/>(giống nhánh ở lại)"]
+        OFF -- không --> CANW["Chờ HSE và bật FDCAN<br/>(giống nhánh ở lại)"]
         CANW --> T0["Bắt đầu đếm T = max(T_min, 6 × t_frame)"]
         T0 --> RX{"Nhận frame?"}
         RX -- "Stop 0x1F51:01 = 0<br/>tới NodeID mình" --> CAUGHT["Giữ lại frame Stop,<br/>FDCAN vẫn chạy"]
@@ -118,7 +119,7 @@ flowchart TD
     DEINIT --> CLEAN["Đưa mọi thứ đã dùng về trạng thái reset,<br/>kể cả clock về HSI16 (bảng dọn dẹp bên dưới)"]
     CLEAN --> JMP([Jump sang app])
 
-    CAN["Bật HSE (chờ tối đa 10 ms) và FDCAN<br/>(bitrate config, không chia được thì mặc định)"] --> CO
+    CAN["Bật HSE nếu chưa bật (chờ tối đa 10 ms<br/>tính từ lúc bật) và FDCAN<br/>(bitrate config, không chia được thì mặc định)"] --> CO
     CAUGHT --> CO["Init CANopen, gửi boot-up<br/>0x700 + NodeID, data 0x00"]
     CO --> REPLY{"Đến từ cửa sổ?"}
     REPLY -- có --> OK["Xử lý frame Stop đã giữ:<br/>trả OK (đã ở bootloader, mục 4.1)"]
@@ -148,7 +149,8 @@ flowchart TD
 **Clock:**
 - Bootloader lên 150 MHz (PLL từ HSI16) ngay khi khởi động, ở mọi nhánh. Chỉ có một cấu hình clock, nên cửa sổ và nhánh ở lại dùng chung clock và FDCAN: bắt được Stop thì không phải làm lại gì. Kiểm tra CRC lúc boot cũng nhanh hơn.
 - FDCAN lấy clock từ HSE. HSI16 sai số tới ±1%, vượt dung sai bit timing của CAN (cỡ ±0.5% với điểm lấy mẫu 87.5%), nên chỉ dùng PCLK1 khi HSE không lên. HSE 8 MHz chia được mọi bitrate trong bảng CiA 305. PCLK1 150 MHz không chia được 800 kbit/s; khi đó dùng bitrate mặc định như nhánh ở lại.
-- HSE chỉ bật khi cần FDCAN (cửa sổ hoặc nhánh ở lại). Chờ HSE có giới hạn thời gian ngắn (mặc định 10 ms), vì cửa sổ chạy ở mọi lần boot, nên board không có thạch anh cũng không được chờ lâu.
+- HSE chỉ bật khi cần FDCAN (cửa sổ hoặc nhánh ở lại). Chờ HSE có giới hạn thời gian ngắn (mặc định 10 ms, tính từ lúc bật HSE), vì cửa sổ chạy ở mọi lần boot, nên board không có thạch anh cũng không được chờ lâu.
+- **Bật HSE song song với kiểm tra app:** ở nhánh không có magic (cửa sổ đang bật), kết quả kiểm tra app thế nào cũng cần FDCAN: hợp lệ thì mở cửa sổ, không hợp lệ thì ở lại bootloader. Vì vậy bật HSE ngay trước khi kiểm tra app, không chờ, để thời gian HSE ổn định trùng với thời gian kiểm tra. Kiểm tra xong mới chờ HSE (phần còn lại của giới hạn) và bật FDCAN. Các nhánh có magic giữ nguyên thứ tự: kiểm tra app trước, chỉ bật HSE khi cần FDCAN.
 - Đổi lại, trước khi jump phải hạ clock về đúng trạng thái reset (bảng dưới).
 
 **Dọn dẹp trước khi jump:** mọi thứ bootloader đã bật trên đường boot phải về đúng trạng thái reset, để app nhận chip giống như lúc vừa power-on.
@@ -176,7 +178,7 @@ flowchart TD
 
 **Bảo mật:** không tệ hơn khi chưa có cửa sổ. Ai trên bus cũng đã gửi Stop cho app được, và image nạp vào vẫn phải có chữ ký. Cái mới duy nhất là giữ được node ở bootloader cả khi app đang chặn Stop, tức chỉ gây được DoS.
 
-**Cái giá:** mỗi lần boot chậm thêm thời gian khởi động HSE, init FDCAN và T ms chờ. Đường boot nào cũng phải lên PLL rồi hạ về, nên bước hạ clock cần test riêng.
+**Cái giá:** mỗi lần boot chậm thêm phần thời gian khởi động HSE chưa trùng được với lúc kiểm tra app, init FDCAN và T ms chờ. Đường boot nào cũng phải lên PLL rồi hạ về, nên bước hạ clock cần test riêng.
 
 ## 4. Quy trình nạp firmware (CiA 302-3)
 

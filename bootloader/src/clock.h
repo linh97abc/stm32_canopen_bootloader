@@ -10,7 +10,17 @@
 /** SYSCLK = 150 MHz (PLL từ HSI16), SysTick 1 ms. Chưa bật HSE. */
 void clock_init(void);
 
-/** Bật HSE làm clock FDCAN (PCLK1 nếu HSE không lên). Gọi sau clock_init(). Trả về kernel clock. */
+/**
+ * Bật HSE, không chờ ổn định: gọi trước việc khác (kiểm tra app) để thời gian
+ * HSE lên trùng với việc đó. Gọi sau clock_init(). Gọi lại thì không làm gì.
+ */
+void clock_hse_start(void);
+
+/**
+ * Chờ HSE (tự bật nếu chưa gọi clock_hse_start) rồi chọn làm clock FDCAN;
+ * HSE không lên trong BOARD_HSE_TIMEOUT_MS tính từ lúc bật thì dùng PCLK1.
+ * Gọi sau clock_init(). Trả về kernel clock.
+ */
 uint32_t clock_fdcan_init(void);
 
 /**

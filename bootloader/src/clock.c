@@ -11,6 +11,8 @@ uint32_t SystemCoreClock = 16000000u; /* CMSIS, thay cho system_stm32g4xx.c */
 
 static volatile uint32_t s_ms;
 static uint32_t s_fdcan_hz;
+static bool s_hse_started;
+static uint32_t s_hse_t0;
 
 void SysTick_Handler(void) { s_ms++; }
 
@@ -25,16 +27,26 @@ static void delay_cycles(uint32_t n)
     }
 }
 
-/* Cần SysTick đang chạy (s_ms tăng) để giới hạn thời gian chờ. */
-static bool hse_start(void)
+void clock_hse_start(void)
 {
+    if (s_hse_started) {
+        return;
+    }
 #if BOARD_HSE_BYPASS
     LL_RCC_HSE_EnableBypass();
 #endif
     LL_RCC_HSE_Enable();
-    uint32_t t0 = s_ms;
+    s_hse_t0 = s_ms;
+    s_hse_started = true;
+}
+
+/* Chờ HSE ổn định, giới hạn tính từ lúc bật: thời gian đã trôi (kiểm tra app)
+ * được trừ vào. Cần SysTick đang chạy (s_ms tăng). */
+static bool hse_wait_ready(void)
+{
+    clock_hse_start();
     while (!LL_RCC_HSE_IsReady()) {
-        if ((s_ms - t0) > BOARD_HSE_TIMEOUT_MS) {
+        if ((s_ms - s_hse_t0) > BOARD_HSE_TIMEOUT_MS) {
             LL_RCC_HSE_Disable();
             return false;
         }
@@ -45,7 +57,7 @@ static bool hse_start(void)
 uint32_t clock_fdcan_init(void)
 {
     /* FDCAN chạy từ HSE. HSE không lên thì dùng PCLK1 (HSI ±1%, chỉ tin cậy ở bitrate thấp). */
-    if (hse_start()) {
+    if (hse_wait_ready()) {
         LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_HSE);
         s_fdcan_hz = BOARD_HSE_HZ;
     } else {
@@ -129,4 +141,5 @@ void clock_deinit(void)
 
     s_ms = 0u;
     s_fdcan_hz = 0u;
+    s_hse_started = false;
 }

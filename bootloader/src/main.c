@@ -7,9 +7,12 @@
  *      - STAY (app nhận Stop): ở lại bootloader.
  *      - START_APP (bootloader vừa nhận Start): app hợp lệ thì dọn rồi nhảy
  *        luôn, không mở cửa sổ.
+ *      Không có magic và cửa sổ đang bật: bật HSE trước khi kiểm tra app, để
+ *      thời gian HSE lên trùng với lúc kiểm tra.
  *   3. Không có magic + app hợp lệ (header, CRC, valid flag) -> mở cửa sổ cứu
- *      node (mục 3.1): bật FDCAN, chỉ nghe T ms. Không bắt được Stop thì đưa
- *      mọi thứ đã dùng (kể cả clock) về trạng thái reset rồi nhảy sang app.
+ *      node (mục 3.1): chờ HSE, bật FDCAN, chỉ nghe T ms. Không bắt được Stop
+ *      thì đưa mọi thứ đã dùng (kể cả clock) về trạng thái reset rồi nhảy
+ *      sang app.
  *   4. Ngược lại: chạy CANopen. Nếu đến từ cửa sổ thì FDCAN đã chạy sẵn, xử lý
  *      tiếp lệnh Stop đã bắt được (trả OK).
  */
@@ -98,6 +101,11 @@ int main(void)
     /* Đọc và xóa magic sau config: reset giữa chừng thì yêu cầu ở lại vẫn còn. */
     blc_boot_req_t req = blc_boot_take_request();
     uint32_t sec_min = blc_secver_min();
+    /* Boot bình thường thì chắc chắn cần FDCAN (cửa sổ, hoặc ở lại nếu app
+     * hỏng): bật HSE ngay, cho nó ổn định trong lúc kiểm tra app. */
+    if (req == BLC_BOOT_REQ_NONE && BL_RESCUE_WINDOW_MIN_MS != 0u) {
+        clock_hse_start();
+    }
     bool app_valid = layout_ok && image_check_boot(sec_min) == IMG_OK;
 
     can_frame_t stop;
