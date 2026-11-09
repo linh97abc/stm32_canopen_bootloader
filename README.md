@@ -68,7 +68,7 @@ make -C tests
   xóa lazy (Clear chỉ xóa 1 page, nạp đè firmware cũ, flag `APPVALID` cũ sót lại
   đúng `FLAG_ADDR` không được nhận, hủy giữa chừng rồi nạp lại).
 
-Test cần `keys/dev_private.pem` (sinh bằng `blc_image.py keygen`, xem phần Chuẩn bị).
+Test tự sinh cặp khóa riêng trong `tests/build/` (không dùng `keys/`).
 
 ## Tích hợp vào app
 

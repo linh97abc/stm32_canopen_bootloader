@@ -22,8 +22,14 @@ APP_START := $(shell echo BLC_APP_START | $(CC) -E -P -x c -DBLC_LINKER_SCRIPT -
 
 all: run
 
-$(BUILD)/pubkey.c: $(ROOT)/keys/dev_public.pem
+# Cặp khóa riêng cho test, sinh một lần trong build/, không dùng keys/.
+TESTKEY := $(BUILD)/test_private.pem
+
+$(TESTKEY):
 	@mkdir -p $(BUILD)
+	$(PYTHON) $(ROOT)/tools/blc_image.py keygen --out $(BUILD)/test
+
+$(BUILD)/pubkey.c: $(TESTKEY)
 	$(PYTHON) $(ROOT)/tools/blc_image.py pubkey-c --key $< --out $@
 
 $(BUILD)/test_config: test_config.c $(COMMON) $(HDRS)
@@ -34,7 +40,7 @@ $(BUILD)/test_sim: test_sim.c sim_stubs.c $(COMMON) $(BL) $(BUILD)/pubkey.c $(HD
 	$(CC) $(CFLAGS) $(filter %.c,$^) -o $@
 
 images: $(BUILD)/pubkey.c
-	$(PYTHON) gen_test_app.py --out $(BUILD) --key $(ROOT)/keys/dev_private.pem --tool $(ROOT)/tools/blc_image.py --app-start $(APP_START)
+	$(PYTHON) gen_test_app.py --out $(BUILD) --key $(TESTKEY) --tool $(ROOT)/tools/blc_image.py --app-start $(APP_START)
 
 run: $(BUILD)/test_config $(BUILD)/test_sim images
 	$(BUILD)/test_config
