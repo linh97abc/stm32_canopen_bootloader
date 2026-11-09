@@ -27,20 +27,36 @@ static void bkp_close(uint32_t clocks_turned_on)
     LL_APB1_GRP1_DisableClock(clocks_turned_on);
 }
 
-void blc_boot_enter_bootloader(void)
+__attribute__((noreturn)) static void reset_with_magic(uint32_t magic)
 {
     __disable_irq();
     (void)bkp_open();
-    *bkp_reg() = BLC_BOOT_MAGIC_STAY_IN_BL;
+    *bkp_reg() = magic;
     __DSB();
     NVIC_SystemReset();
 }
 
-bool blc_boot_take_request(void)
+void blc_boot_enter_bootloader(void)
+{
+    reset_with_magic(BLC_BOOT_MAGIC_STAY_IN_BL);
+}
+
+void blc_boot_start_app(void)
+{
+    reset_with_magic(BLC_BOOT_MAGIC_START_APP);
+}
+
+blc_boot_req_t blc_boot_take_request(void)
 {
     uint32_t opened = bkp_open();
-    bool req = (*bkp_reg() == BLC_BOOT_MAGIC_STAY_IN_BL);
-    if (req) {
+    uint32_t v = *bkp_reg();
+    blc_boot_req_t req = BLC_BOOT_REQ_NONE;
+    if (v == BLC_BOOT_MAGIC_STAY_IN_BL) {
+        req = BLC_BOOT_REQ_STAY;
+    } else if (v == BLC_BOOT_MAGIC_START_APP) {
+        req = BLC_BOOT_REQ_START_APP;
+    }
+    if (req != BLC_BOOT_REQ_NONE) {
         *bkp_reg() = 0u;
         __DSB();
     }

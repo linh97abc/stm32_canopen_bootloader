@@ -39,17 +39,25 @@ Mỗi vùng phải nằm trọn trong các page riêng, nên phân vùng phụ t
 1. App nhận lệnh **Stop program** (ghi `0x1F51:01 = 0`) và trả SDO response.
 2. App chờ tới khi SDO response đã thực sự ra bus (TX FIFO của FDCAN rỗng), rồi ghi một giá trị magic vào backup register (`TAMP_BKPxR`) và gọi `NVIC_SystemReset()`. Reset sớm hơn thì response bị mất.
 3. Bootloader khởi động và đọc backup register:
-   - **Có magic:** xóa magic, ở lại bootloader và gửi boot-up message (`0x700 + NodeID`, data `0x00`).
+   - **Magic "ở lại bootloader":** xóa magic, ở lại bootloader và gửi boot-up message (`0x700 + NodeID`, data `0x00`).
+   - **Magic "vào app":** do chính bootloader ghi trước khi reset sau Start program (mục 4, bước 5). Xóa magic, kiểm tra app hợp lệ (mục 5). Hợp lệ thì dọn ngoại vi đã dùng rồi jump sang app, **không mở cửa sổ cứu node**. Không hợp lệ thì ở lại bootloader.
    - **Không có magic:** kiểm tra app hợp lệ (mục 5). Nếu không hợp lệ thì ở lại bootloader. Nếu hợp lệ thì mở cửa sổ cứu node (mục 3.1): bắt được lệnh Stop thì ở lại bootloader, hết cửa sổ thì dọn ngoại vi đã dùng rồi jump sang app.
+   - Giá trị khác coi như không có magic.
 
 ```mermaid
 flowchart TD
     STOP["App nhận Stop program<br/>(0x1F51:01 = 0)"] --> WR["App ghi magic vào TAMP_BKPxR<br/>rồi NVIC_SystemReset()"]
     WR --> RST
     POR(["Power-on / reset khác"]) --> RST([Bootloader khởi động])
+    STARTP["Bootloader nhận Start program<br/>(0x1F51:01 = 1), app hợp lệ"] --> WRG["Bootloader trả response, ghi magic<br/>loại vào app vào TAMP_BKPxR<br/>rồi NVIC_SystemReset()"]
+    WRG --> RST
     RST --> MAGIC{"Backup register<br/>có magic?"}
-    MAGIC -- có --> CLR["Xóa magic"]
+    MAGIC -- "ở lại bootloader" --> CLR["Xóa magic"]
     CLR --> STAY["Ở lại bootloader<br/>gửi boot-up: 0x700 + NodeID, data 0x00"]
+    MAGIC -- "vào app" --> CLRG["Xóa magic"]
+    CLRG --> CHKG{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    CHKG -- có --> CLEAN
+    CHKG -- không --> STAY
     MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
     CHK -- có --> WIN["Cửa sổ cứu node: bật FDCAN,<br/>chỉ nghe trong T ms (mục 3.1)"]
     WIN --> GOT{"Nhận Stop<br/>gửi tới NodeID mình?"}
@@ -84,8 +92,12 @@ flowchart TD
     RST([Bootloader khởi động]) --> CLK["Lên 150 MHz (PLL từ HSI16), SysTick 1 ms"]
     CLK --> CFG["Đọc config: NodeID, bitrate (mục 6)"]
     CFG --> MAGIC{"Backup register<br/>có magic?"}
-    MAGIC -- có --> CLR["Xóa magic"]
+    MAGIC -- "ở lại bootloader" --> CLR["Xóa magic"]
     CLR --> CAN
+    MAGIC -- "vào app" --> CLRG["Xóa magic"]
+    CLRG --> CHKG{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
+    CHKG -- không --> CAN
+    CHKG -- có --> CLEAN
     MAGIC -- không --> CHK{"App hợp lệ?<br/>(mục 5.5, boot bình thường)"}
     CHK -- không --> CAN
     CHK -- có --> OFF{"T_min = 0<br/>(tắt lúc build)?"}
@@ -114,10 +126,12 @@ flowchart TD
     OK --> WAIT(["Chờ lệnh nạp từ master (mục 4)"])
 ```
 
-- Magic được đọc và xóa sau khi đã lên clock và đọc config. Nếu node bị reset giữa chừng (mất điện, watchdog lúc đang sửa page config) thì magic vẫn còn, yêu cầu ở lại bootloader không bị mất.
+- Magic được đọc và xóa sau khi đã lên clock và đọc config. Nếu node bị reset giữa chừng (mất điện, watchdog lúc đang sửa page config) thì magic vẫn còn, yêu cầu trong magic không bị mất.
 
 **Hành vi trong cửa sổ:**
 - Cửa sổ chỉ mở ở nhánh "không có magic, app hợp lệ", ngay trước khi jump. Khi có magic hoặc app không hợp lệ thì không có cửa sổ, luồng giữ nguyên.
+- **Bỏ qua cửa sổ sau Start program:** lúc này master vừa chủ động ra lệnh vào app, không có ai gửi Stop, nên chờ T ms chỉ làm chậm. Bootloader ghi magic "vào app" trước khi reset để báo cho lần boot kế tiếp. Không mất đường cứu: magic bị xóa ngay ở lần boot đó, nên app mới có hỏng thì mọi lần reset sau (tắt bật nguồn, watchdog, NMT `0x81`) vẫn đi qua cửa sổ như thường. NMT `0x81` gửi tới bootloader cũng không ghi magic, nên vẫn mở cửa sổ (mục 4.2).
+- Nhánh magic "vào app" vẫn kiểm tra app như boot bình thường, không tin vào kết quả kiểm tra lúc Start. Magic chỉ quyết định có mở cửa sổ hay không.
 - Bootloader đọc NodeID và bitrate từ config (mục 6) giống nhánh ở lại, rồi bật FDCAN ở chế độ normal.
 - Bootloader **không gửi gì**: không boot-up, không heartbeat. FDCAN vẫn ACK frame như mọi node khác. Nhìn từ bus, một lần boot bình thường vẫn chỉ có một boot-up, là của app.
 - Chỉ chấp nhận một loại frame: SDO request (`0x600 + NodeID`, DLC 8), expedited download ghi `0x1F51:01 = 0`. Byte lệnh là `0x2F` (báo kích thước 1 byte) hoặc `0x22` (không báo kích thước), byte data đầu tiên bằng `0`. Đó đúng là các lệnh Stop mà SDO server của bootloader trả OK (mục 4.1). Các biến thể `0x2B`, `0x27`, `0x23` thì server và app theo chuẩn đều trả abort vì sai kích thước, nên cửa sổ cũng không nhận.
@@ -172,7 +186,7 @@ flowchart TD
 | 2 | Chờ boot-up message từ node. Không thấy thì poll `0x1F51:01` (mục 4.2) | Bootloader gửi boot-up |
 | 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa page đầu (vector table + header) để app cũ hết hiệu lực. Các page sau xóa dần khi nhận image (xóa lazy) |
 | 4 | Tải image vào `0x1F50:01` bằng **SDO block transfer** | Nhận dữ liệu và ghi vào flash |
-| 5 | Gửi **Start program**: `0x1F51:01 = 1` | Kiểm tra CRC và chữ ký (mục 5.5). Nếu đúng: đánh dấu valid, trả SDO response rồi reset. Sau reset, bootloader kiểm tra app như boot bình thường (mục 3) rồi jump sang app. Nếu sai: báo SDO abort và ở lại bootloader |
+| 5 | Gửi **Start program**: `0x1F51:01 = 1` | Kiểm tra CRC và chữ ký (mục 5.5). Nếu đúng: đánh dấu valid, trả SDO response, ghi magic "vào app" rồi reset. Sau reset, bootloader kiểm tra app như boot bình thường rồi jump sang app, không mở cửa sổ cứu node (mục 3). Nếu sai: báo SDO abort và ở lại bootloader |
 
 ```mermaid
 sequenceDiagram
@@ -209,8 +223,8 @@ sequenceDiagram
         B->>F: Ghi valid flag tại FLAG_ADDR
         B->>F: Ghi entry OTP nếu security_version > SEC_MIN (mục 5.6)
         B-->>M: SDO response
-        B->>B: NVIC_SystemReset()
-        Note over B: Boot bình thường: không có magic, app hợp lệ, hết cửa sổ (mục 3)
+        B->>B: Ghi magic "vào app" vào TAMP_BKPxR, NVIC_SystemReset()
+        Note over B: Magic "vào app" → xóa magic, app hợp lệ, không mở cửa sổ (mục 3)
         B->>A: Jump sang app
     else Sai
         B-->>M: SDO abort, ở lại bootloader
@@ -416,7 +430,7 @@ Bootloader nhận stream liên tục và chia theo offset:
 4. Verify chữ ký trong buffer RAM theo `sig_algo`, tính trên dữ liệu **đọc lại từ flash** (`[APP_START, APP_START + image_size + 4)`). Như vậy là xác thực đúng những gì đã thực sự ghi vào flash. Public key lưu trong bootloader.
 5. Cả 4 bước đều đạt thì ghi valid flag tại `FLAG_ADDR`.
 6. Nếu `security_version > SEC_MIN` thì ghi entry mới vào OTP (mục 5.6).
-7. Trả SDO response cho Start program rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới), mở cửa sổ cứu node (mục 3.1) rồi mới jump sang app. Không jump thẳng từ lúc đang chạy CANopen: đường boot bình thường chỉ dùng một tập ngoại vi nhỏ và có danh sách dọn dẹp rõ ràng (mục 3.1), nên app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
+7. Trả SDO response cho Start program, ghi magic "vào app" (mục 3) rồi reset. Sau reset, bootloader kiểm tra như boot bình thường (bên dưới) rồi jump sang app, không mở cửa sổ cứu node (mục 3.1). Không jump thẳng từ lúc đang chạy CANopen: đường boot bình thường chỉ dùng một tập ngoại vi nhỏ và có danh sách dọn dẹp rõ ràng (mục 3.1), nên app luôn khởi động với clock và ngoại vi ở trạng thái reset, giống hệt khi power-on. Code HAL của app hay giả định điều này.
 
 **Mỗi lần boot bình thường:** chạy lại bước 1–2 (bước 2 chỉ kiểm tra giới hạn vùng app, vì lúc này không có số byte đã nhận). Bước 3 gồm hai điều kiện: `image_crc` đúng và valid flag tại `FLAG_ADDR` bằng `APPVALID`. Valid flag thay cho bước 4, nên không verify lại chữ ký.
 
@@ -429,7 +443,7 @@ flowchart TD
         S3 -- đạt --> S4{"Bước 4: Chữ ký trên dữ liệu<br/>đọc lại từ flash"}
         S4 -- đạt --> S5["Bước 5: Ghi valid flag tại FLAG_ADDR"]
         S5 --> S6["Bước 6: Nâng SEC_MIN trong OTP nếu cần"]
-        S6 --> S7(["Bước 7: SDO response, reset<br/>→ boot bình thường → jump sang app"])
+        S6 --> S7(["Bước 7: SDO response, magic vào app, reset<br/>→ kiểm tra như boot bình thường → jump sang app"])
         S1 & S2 & S3 & S4 -- sai --> SX([SDO abort, ở lại bootloader])
     end
 

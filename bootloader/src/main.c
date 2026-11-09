@@ -3,8 +3,10 @@
  *
  * Luồng khởi động:
  *   1. Lên 150 MHz ở mọi nhánh, đọc config (NodeID, bitrate).
- *   2. Đọc và xóa magic trong backup register (app yêu cầu ở lại bootloader),
- *      kiểm tra app.
+ *   2. Đọc và xóa magic trong backup register, kiểm tra app.
+ *      - STAY (app nhận Stop): ở lại bootloader.
+ *      - START_APP (bootloader vừa nhận Start): app hợp lệ thì dọn rồi nhảy
+ *        luôn, không mở cửa sổ.
  *   3. Không có magic + app hợp lệ (header, CRC, valid flag) -> mở cửa sổ cứu
  *      node (mục 3.1): bật FDCAN, chỉ nghe T ms. Không bắt được Stop thì đưa
  *      mọi thứ đã dùng (kể cả clock) về trạng thái reset rồi nhảy sang app.
@@ -94,14 +96,18 @@ int main(void)
     }
 
     /* Đọc và xóa magic sau config: reset giữa chừng thì yêu cầu ở lại vẫn còn. */
-    bool stay = blc_boot_take_request();
+    blc_boot_req_t req = blc_boot_take_request();
     uint32_t sec_min = blc_secver_min();
     bool app_valid = layout_ok && image_check_boot(sec_min) == IMG_OK;
 
     can_frame_t stop;
     bool caught = false;
-    if (!stay && app_valid) {
-        caught = rescue_window(node_id, bitrate_idx, &stop);
+    if (req != BLC_BOOT_REQ_STAY && app_valid) {
+        /* Sau Start, master đang chờ app: không cần cửa sổ. Reset sau đó
+         * không còn magic nên vẫn cứu được node như thường. */
+        if (req == BLC_BOOT_REQ_NONE) {
+            caught = rescue_window(node_id, bitrate_idx, &stop);
+        }
         if (!caught) {
             boot_path_cleanup();
             boot_jump_to_app();

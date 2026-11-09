@@ -7,6 +7,7 @@
 #include "fdcan.h"
 #include "od.h"
 #include "sdo.h"
+#include "blc/blc_boot.h"
 #include "stm32g4xx.h"
 
 static uint8_t s_node;
@@ -35,12 +36,12 @@ void co_init(uint8_t node_id)
     reset_communication();
 }
 
-static void wait_tx_then_reset(void)
+/* Chờ response cuối đã ra bus: reset sớm hơn thì mất response. */
+static void wait_tx(void)
 {
     uint32_t t0 = clock_ms();
     while (!fdcan_tx_idle() && (clock_ms() - t0) < 50u) {
     }
-    NVIC_SystemReset();
 }
 
 static void handle_nmt(const can_frame_t *f)
@@ -52,7 +53,7 @@ static void handle_nmt(const can_frame_t *f)
     case 0x01: s_state = NMT_STATE_OPERATIONAL; break;
     case 0x02: s_state = NMT_STATE_STOPPED; sdo_reset(); break;
     case 0x80: s_state = NMT_STATE_PREOP; break;
-    case 0x81: wait_tx_then_reset(); break;  /* Reset node: boot lại, vào app nếu hợp lệ */
+    case 0x81: wait_tx(); NVIC_SystemReset(); break; /* Reset node: boot bình thường, có cửa sổ */
     case 0x82: reset_communication(); break;
     default: break;
     }
@@ -66,7 +67,8 @@ void co_handle(const can_frame_t *f)
         sdo_handle(f);
     }
     if (g_od_reset_request) {
-        wait_tx_then_reset(); /* đã gửi response cho Start program */
+        wait_tx();            /* đã gửi response cho Start program */
+        blc_boot_start_app(); /* reset, boot thẳng vào app không qua cửa sổ */
     }
 }
 

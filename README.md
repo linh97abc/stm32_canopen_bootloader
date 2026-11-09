@@ -13,7 +13,7 @@ common/              Thư viện BLC (BootLoader Common), dùng chung app + boot
     blc_config.h       Lưu config dạng log append trong 1 page flash
     blc_config_ids.h   ID cấu hình + giá trị mặc định (NodeID, bitrate)
     blc_identity.h     Identity CANopen 0x1000/0x1018 + serial (CRC32 của UID)
-    blc_boot.h         App -> bootloader qua backup register TAMP_BKP0R
+    blc_boot.h         Magic trong backup register TAMP_BKP0R (Stop -> ở lại BL, Start -> vào app)
     blc_secver.h       Bộ đếm chống rollback SEC_MIN trong OTP
     blc_flash.h        Ghi/xóa flash, đọc có kiểm tra ECC (NMI hook)
     blc_crc.h          CRC-32 (khối CRC phần cứng) / CRC-8
@@ -113,7 +113,8 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 3. Tải `app.blcimg` vào `0x1F50:01`. Ưu tiên SDO block (blksize 127, có CRC);
    segmented cũng hỗ trợ.
 4. `0x1F51:01 = 1` (Start). Bootloader verify CRC + chữ ký RSA, ghi valid flag,
-   nâng SEC_MIN nếu cần, trả response rồi reset vào app. Nếu image sai thì abort
+   nâng SEC_MIN nếu cần, trả response rồi reset vào app (ghi magic nên không
+   chờ cửa sổ cứu node). Nếu image sai thì abort
    `0x08000020`. Nếu không có app hợp lệ hoặc nạp chưa xong thì abort `0x08000022`.
 
 ```mermaid
