@@ -25,6 +25,9 @@ CFLAGS   := $(CPUFLAGS) -std=c11 -Os -g3 -Wall -Wextra -Wshadow -Wno-unused-para
 LDFLAGS  := $(CPUFLAGS) -nostartfiles --specs=nano.specs --specs=nosys.specs \
             -Wl,--gc-sections -Wl,-Map=$(BUILD)/bootloader.map -Wl,--print-memory-usage
 
+# SHA-256 quét toàn image lúc Start, chiếm gần hết thời gian verify: tối ưu tốc độ.
+$(BUILD)/obj/src/crypto/sha256.o: CFLAGS += -O3
+
 OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(subst ../,,$(SRCS))) $(BUILD)/obj/pubkey.o
 LDSCRIPT := $(BUILD)/bootloader.ld
 
