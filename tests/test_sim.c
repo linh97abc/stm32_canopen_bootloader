@@ -204,6 +204,15 @@ static void flashed_ok(const blob_t *b)
     for (uint32_t i = 0; (BLC_APP_START + n + i) % 8; i++) CHECK_EQ(after[i], 0xFF);
 }
 
+static uint32_t flash_status(void)
+{
+    uint32_t v = 0xDEADBEEF;
+    CHECK_EQ(sdo_read(0x1F57, 1, &v), SDO_OK);
+    return v;
+}
+
+#define FLASH_ERR(code) ((uint32_t)(code) << 1)
+
 static bool page_blank(uint32_t addr)
 {
     const uint8_t *p = (const uint8_t *)(uintptr_t)(addr & ~(BLC_FLASH_PAGE_SIZE - 1u));
@@ -224,6 +233,12 @@ static void test_od(void)
     CHECK_EQ(v, 1); /* chưa có app */
     CHECK_EQ(sdo_read(0x1F51, 1, &v), SDO_OK);
     CHECK_EQ(v, PROG_STATUS_NO_PROGRAM);
+    CHECK_EQ(sdo_read(0x1F57, 0, &v), SDO_OK);
+    CHECK_EQ(v, 1);
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_NO_PROGRAM));
+    CHECK_EQ(sdo_read(0x1F57, 2, &v), SDO_ABORT_NO_SUBINDEX);
+    CHECK_EQ(sdo_write(0x1F57, 1, 0, 4), SDO_ABORT_READ_ONLY);
+    CHECK_EQ(sdo_write(0x1F57, 2, 0, 4), SDO_ABORT_NO_SUBINDEX);
     CHECK_EQ(sdo_write(0x1017, 0, 1000, 2), SDO_OK);
     CHECK_EQ(sdo_read(0x1017, 0, &v), SDO_OK);
     CHECK_EQ(v, 1000);
@@ -248,15 +263,16 @@ static void test_download_flow(void)
     blob_t v1 = load("v1.blcimg"), v2 = load("v2.blcimg"), v3 = load("v3.blcimg");
     blob_t bad = load("badcrc.blcimg"), wrong = load("wrongkey.blcimg");
 
-    /* Chưa Clear -> không cho nạp */
-    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_ABORT_DEVICE_STATE);
+    /* Chưa có gì để Start */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
 
-    /* v1: block download có CRC, mất 1 segment ở block thứ 2 */
-    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    /* v1 trên chip trống: không gửi Clear (đọc 0x1F51 = 3 thì nạp được ngay,
+     * bootloader tự Clear). Block download có CRC, mất 1 segment ở block thứ 2 */
+    g_fake_erase_count = 0;
     CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 40, 0), SDO_OK);
     flashed_ok(&v1);
     CHECK_EQ(flag_at(&v1), UINT64_MAX);
+    CHECK_EQ(flash_status(), 0); /* nạp xong, không lỗi */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
     CHECK(g_od_reset_request);
     g_od_reset_request = false;
@@ -268,6 +284,15 @@ static void test_download_flow(void)
     CHECK_EQ(v, PROG_STATUS_STOPPED);
     CHECK_EQ(sdo_read(0x1001, 0, &v), SDO_OK);
     CHECK_EQ(v, 0);
+    CHECK_EQ(flash_status(), 0);
+
+    /* Có app hợp lệ: không Clear ngầm, app cũ còn nguyên */
+    g_fake_erase_count = 0;
+    CHECK_EQ(block_write(0x1F50, 1, v2.data, v2.len, 0, 0), SDO_ABORT_DEVICE_STATE);
+    CHECK_EQ(segmented_write(0x1F50, 1, v2.data, v2.len), SDO_ABORT_DEVICE_STATE);
+    CHECK_EQ(g_fake_erase_count, 0);
+    CHECK_EQ(image_check_boot(0), IMG_OK);
+    CHECK_EQ(flash_status(), 0);
 
     /* Start khi đã có app hợp lệ (không nạp) -> reset để boot vào app */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
@@ -287,25 +312,42 @@ static void test_download_flow(void)
     g_fake_erase_count = 0;
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(g_fake_erase_count, 0);
+    /* Ghi 0x1F50 luôn Clear trước, nhưng page đầu đã trống nên không xóa lại */
+    CHECK_EQ(program_dl_begin(true, v1.len), SDO_OK);
+    CHECK_EQ(g_fake_erase_count, 0);
+    program_dl_abort();
 
     /* CRC sai -> Start bị abort, không có flag */
     CHECK_EQ(block_write(0x1F50, 1, bad.data, bad.len, 0, 0), SDO_OK);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DATA_STORE);
     CHECK_EQ(flag_at(&bad), UINT64_MAX);
     CHECK(!g_od_reset_request);
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_FORMAT));
+    CHECK_EQ(sdo_read(0x1F51, 1, &v), SDO_OK);
+    CHECK_EQ(v, PROG_STATUS_NO_PROGRAM);
 
-    /* Chữ ký bởi khóa khác -> abort */
-    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    /* Chữ ký bởi khóa khác -> abort. Sau Start lỗi nạp lại ngay, không Clear */
     CHECK_EQ(segmented_write(0x1F50, 1, wrong.data, wrong.len), SDO_OK);
     CHECK_EQ(image_check_boot(0), IMG_NOT_VALID); /* CRC đúng nhưng chưa có flag */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DATA_STORE);
     CHECK_EQ(flag_at(&wrong), UINT64_MAX);
 
-    /* Nạp dở (master abort) -> Start bị từ chối, phải Clear lại */
+    /* Nạp dở (master abort) -> Start bị từ chối, nạp lại ngay không cần Clear */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 3000), 0xDEAD);
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_NO_PROGRAM));
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
-    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_ABORT_DEVICE_STATE);
+    CHECK(image_check_boot(0) != IMG_OK);
+    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_OK);
+    CHECK_EQ(flash_status(), 0);
+
+    /* Nhận xong nhưng chưa Start: nạp bản khác luôn, không cần Clear */
+    CHECK_EQ(segmented_write(0x1F50, 1, wrong.data, wrong.len), SDO_OK);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DATA_STORE); /* đúng là image vừa nạp */
+    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_OK);
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
+    g_od_reset_request = false;
+    CHECK_EQ(image_check_boot(0), IMG_OK);
 
     /* File dài hơn image + chữ ký -> abort */
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
@@ -336,6 +378,7 @@ static void test_download_flow(void)
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(block_write(0x1F50, 1, v3.data, v3.len, 0, 0), SDO_ABORT_DATA_STORE);
     CHECK_EQ(*(const uint32_t *)(uintptr_t)BLC_APP_HEADER_ADDR, 0xFFFFFFFFu); /* magic không được ghi */
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_FORMAT));
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
     CHECK_EQ(segmented_write(0x1F50, 1, v1.data, v1.len), SDO_ABORT_DATA_STORE);
@@ -388,6 +431,7 @@ static void test_lazy_erase(void)
     program_init(true, false, 0);
     CHECK_EQ(program_control(PROG_CTRL_CLEAR, &(bool){false}), SDO_OK);
     CHECK_EQ(program_dl_begin(true, v1.len), SDO_OK);
+    CHECK_EQ(program_flash_status(), PROG_FLASH_IN_PROGRESS);
     CHECK_EQ(program_dl_data(v1.data, 0x21B), SDO_OK); /* thiếu 1 byte header */
     CHECK_EQ(*(const uint32_t *)(uintptr_t)BLC_APP_HEADER_ADDR, 0xFFFFFFFFu);
     CHECK_EQ(flag_at(&v1), BLC_APP_VALID_FLAG);
@@ -398,13 +442,25 @@ static void test_lazy_erase(void)
     program_dl_abort(); /* mất điện / master hủy giữa chừng */
     CHECK(image_check_boot(0) != IMG_OK);
 
-    /* Hủy giữa chừng rồi nạp lại từ đầu */
-    CHECK_EQ(program_dl_begin(true, v1.len), SDO_ABORT_DEVICE_STATE);
-    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_CLEAR, 1), SDO_OK);
+    /* Hủy giữa chừng rồi nạp lại từ đầu, không gửi Clear: Clear ngầm xóa page
+     * đầu (header + magic vừa ghi) trước khi nhận byte đầu tiên */
+    g_fake_erase_count = 0;
+    CHECK_EQ(program_dl_begin(true, v1.len), SDO_OK);
+    CHECK_EQ(g_fake_erase_count, 1);
+    CHECK(page_blank(BLC_APP_START));
+    program_dl_abort();
     CHECK_EQ(segmented_write(0x1F50, 1, v1.data, v1.len), SDO_OK);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_OK);
     g_od_reset_request = false;
     CHECK_EQ(image_check_boot(0), IMG_OK);
+
+    /* Ô flash hỏng (ghi không được) -> abort lỗi phần cứng, 0x1F57 báo lỗi ghi */
+    fake_flash_reset();
+    program_init(true, false, 0);
+    fake_flash_set_stuck(BLC_APP_START + BLC_FLASH_PAGE_SIZE + 0x100);
+    CHECK_EQ(block_write(0x1F50, 1, v1.data, v1.len, 0, 0), SDO_ABORT_HW_ERROR);
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_WRITE));
+    CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
 
     free(v1.data);
 }
@@ -448,6 +504,7 @@ static void test_timeout(void)
     sdo_tick(g_sim_ms);
     CHECK(rsp(r) && r[0] == 0x80 && abort_code(r) == SDO_ABORT_TIMEOUT);
     CHECK_EQ(sdo_write(0x1F51, 1, PROG_CTRL_START, 1), SDO_ABORT_DEVICE_STATE);
+    CHECK_EQ(flash_status(), FLASH_ERR(PROG_FLASH_ERR_NO_PROGRAM));
 }
 
 int main(int argc, char **argv)

@@ -67,6 +67,11 @@ uint32_t od_read(uint16_t index, uint8_t sub, uint8_t buf[4], uint8_t *len)
         v = program_status();
         n = 1;
         break;
+    case 0x1F57:
+        if (sub == 0) { v = 1; n = 1; break; }
+        if (sub != 1) return SDO_ABORT_NO_SUBINDEX;
+        v = program_flash_status();
+        break;
     default:
         return SDO_ABORT_NO_OBJECT;
     }
@@ -107,6 +112,8 @@ uint32_t od_write_begin(uint16_t index, uint8_t sub, bool size_known, uint32_t s
         if (sub != 1) return SDO_ABORT_NO_SUBINDEX;
         W.obj_size = 1;
         break;
+    case 0x1F57:
+        return (sub > 1) ? SDO_ABORT_NO_SUBINDEX : SDO_ABORT_READ_ONLY;
     default:
         return SDO_ABORT_NO_OBJECT;
     }
