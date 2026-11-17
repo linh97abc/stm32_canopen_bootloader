@@ -63,7 +63,9 @@ make -C tests
   lỗi ECC ở ô cuối (mất điện lúc append) hoặc ở giữa page (mất điện lúc xóa),
   giá trị ngoài miền thì dùng mặc định.
 - `test_sim`: master giả chạy toàn bộ quy trình Clear → nạp (block có CRC, có
-  mất segment; segmented) → Start. Kiểm tra valid flag, CRC sai, sai khóa ký,
+  mất segment; segmented) → Start. Clear ngầm khi không có app hợp lệ (chip trống,
+  sau nạp dở, Start lỗi, nhận xong chưa Start), có app hợp lệ thì vẫn phải Clear.
+  Flash status `0x1F57` sau từng trường hợp (xong, sai định dạng, lỗi ghi flash). Kiểm tra valid flag, CRC sai, sai khóa ký,
   nạp dở, file thừa/thiếu byte, chống rollback qua OTP, hết entry OTP, SDO timeout,
   xóa lazy (Clear chỉ xóa 1 page, nạp đè firmware cũ, flag `APPVALID` cũ sót lại
   đúng `FLAG_ADDR` không được nhận, hủy giữa chừng rồi nạp lại).
@@ -110,8 +112,10 @@ Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 2. `0x1F51:01 = 3` (Clear). Bootloader chỉ xóa page đầu (vector table + header)
    nên app cũ hết hiệu lực ngay và lệnh trả lời trong khoảng một lần xóa page
    (≤ ~40 ms). Các page sau được xóa dần khi nhận image.
+   Bỏ qua được khi không có app hợp lệ (đọc `0x1F51:01` = `3`): bước 3 tự Clear.
 3. Tải `app.blcimg` vào `0x1F50:01`. Ưu tiên SDO block (blksize 127, có CRC);
-   segmented cũng hỗ trợ.
+   segmented cũng hỗ trợ. Kết quả đọc ở `0x1F57:01` (flash status, `0` = không lỗi,
+   xem [design.md mục 4.1](docs/design.md#41-object-dictionary-của-bootloader)).
 4. `0x1F51:01 = 1` (Start). Bootloader verify CRC + chữ ký RSA, ghi valid flag,
    nâng SEC_MIN nếu cần, trả response rồi reset vào app (ghi magic nên không
    chờ cửa sổ cứu node). Nếu image sai thì abort
@@ -155,7 +159,7 @@ sequenceDiagram
         Note over M,A: Mất response: gửi lại Start, app trả OK.<br/>Xác nhận bằng đọc 0x1F51:01 = 1
     else Sai
         B-->>M: SDO abort 0x08000020 (data store)
-        Note over M,B: Ở lại bootloader (DIRTY). Gửi lại Start → 0x08000022.<br/>Phải Clear rồi nạp lại
+        Note over M,B: Ở lại bootloader, không có app hợp lệ. Gửi lại Start → 0x08000022.<br/>Nạp lại luôn (tự Clear vì không có app hợp lệ)
     end
 ```
 
@@ -167,6 +171,21 @@ sequenceDiagram
 | Block ACK / segment response | 1 lần xóa page + ghi 1 block (~50 ms) | Block 889 B cắt qua tối đa 1 ranh giới page |
 | Start | SHA-256 toàn image + RSA-2048 | **Chưa đo.** Ước lượng < 0,5 s với image 488 KB ở 150 MHz. Nên đặt timeout ≥ 1 s cho lệnh này |
 | Giữa hai frame của một transfer | — | Bootloader tự abort `0x05040000` sau 2 s không nhận frame |
+
+### Nạp bằng `canopenctl`
+
+`canopenctl program download` (otfabric/canopenctl) chạy đúng quy trình trên:
+đọc `0x1F51`, Stop/Clear nếu cần, block download có CRC, poll `0x1F57`, Start rồi
+chờ `0x1F51` = 1. Mới đối chiếu với mã nguồn canopenctl v0.8.1, **chưa chạy thử
+trên phần cứng**:
+
+```sh
+sudo ip link set can0 up type can bitrate 250000
+canopenctl program download 127 app.blcimg -i can0 --yes --timeout 2s
+```
+
+- `--timeout 2s` cho lệnh Start (verify chữ ký, xem bảng dưới).
+- Không dùng `--crc32` / `--identification`: chúng đọc `0x1F56`, bootloader không có.
 
 ### Mất bản tin, khôi phục và hủy giữa chừng
 

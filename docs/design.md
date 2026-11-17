@@ -186,8 +186,8 @@ flowchart TD
 |---|---|---|
 | 1 | Gửi **Stop program**: `0x1F51:01 = 0`. App không phản hồi thì cứu node (mục 4.4) | Nếu đang ở App thì chuyển về bootloader (mục 3) |
 | 2 | Chờ boot-up message từ node. Không thấy thì poll `0x1F51:01` (mục 4.2) | Bootloader gửi boot-up |
-| 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa page đầu (vector table + header) để app cũ hết hiệu lực. Các page sau xóa dần khi nhận image (xóa lazy) |
-| 4 | Tải image vào `0x1F50:01` bằng **SDO block transfer** | Nhận dữ liệu và ghi vào flash |
+| 3 | Gửi **Clear program**: `0x1F51:01 = 3` | Xóa page đầu (vector table + header) để app cũ hết hiệu lực. Các page sau xóa dần khi nhận image (xóa lazy). Bỏ qua được khi không có app hợp lệ (đọc `0x1F51:01` = `3`): bước 4 tự Clear (mục 4.1) |
+| 4 | Tải image vào `0x1F50:01` bằng **SDO block transfer** | Nhận dữ liệu và ghi vào flash. Master đọc được kết quả ở `0x1F57:01` |
 | 5 | Gửi **Start program**: `0x1F51:01 = 1` | Kiểm tra CRC và chữ ký (mục 5.5). Nếu đúng: đánh dấu valid, trả SDO response, ghi magic "vào app" rồi reset. Sau reset, bootloader kiểm tra app như boot bình thường rồi jump sang app, không mở cửa sổ cứu node (mục 3). Nếu sai: báo SDO abort và ở lại bootloader |
 
 ```mermaid
@@ -244,7 +244,7 @@ sequenceDiagram
 
 ### 4.1 Object dictionary của bootloader
 
-Bootloader chỉ hỗ trợ các object bắt buộc theo CiA 301 và CiA 302-3. Riêng `0x1018` có đủ 4 sub, để master theo CiA 302-2 kiểm tra được đầy đủ identity khi node boot-up vào bootloader:
+Bootloader hỗ trợ các object bắt buộc theo CiA 301 và CiA 302-3, cộng thêm `0x1F57` (flash status, tùy chọn) để các tool manager CiA 302-3 (ví dụ `canopenctl program download`) chạy được trọn quy trình. Riêng `0x1018` có đủ 4 sub, để master theo CiA 302-2 kiểm tra được đầy đủ identity khi node boot-up vào bootloader:
 
 | Object | Tên | Truy cập | Theo | Ghi chú |
 |---|---|---|---|---|
@@ -258,9 +258,13 @@ Bootloader chỉ hỗ trợ các object bắt buộc theo CiA 301 và CiA 302-3.
 | `0x1018:04` | Serial number | RO | CiA 301 | CRC32 của UID 96-bit của chip (`0x1FFF_7590`), app tính cùng cách |
 | `0x1F50:01` | Program data | WO | CiA 302-3 | Nhận image (mục 5.4) |
 | `0x1F51:01` | Program control | RW | CiA 302-3 | Ghi: `0` = Stop (đã ở bootloader nên chỉ trả OK), `1` = Start, `3` = Clear. Đọc: `0` = có app hợp lệ (đang đứng ở bootloader), `3` = không có app hợp lệ. App trả `1` (mục 3) |
+| `0x1F57:00` | Flash status: số sub-index | RO | CiA 302-3 | `1` |
+| `0x1F57:01` | Flash status | RO | CiA 302-3 | UNSIGNED32. Bit 0 = `1` khi đang nhận image. Bit 1..7 = mã lỗi: `0` = không lỗi, `1` = không có app hợp lệ (chưa nạp, nạp dở hoặc bị hủy), `3` = header / độ dài / CRC / chữ ký sai, `5` = xóa hoặc ghi flash lỗi, `6` = image vượt vùng app. Nạp xong (chưa Start) hoặc có app hợp lệ: `0` |
 
 - Các hằng số của `0x1000` và `0x1018:01–03`, cùng hàm tính serial number, đặt trong file header/source dùng chung với app. Như vậy identity của bootloader và app luôn giống hệt nhau.
-- Không hỗ trợ (đều là tùy chọn): `0x100A`, `0x1F56`, `0x1F57`.
+- **Clear ngầm:** đọc `0x1F51:01` = `3` nghĩa là ghi `0x1F50:01` được ngay, đúng mô hình CiA 302-3. Khi không có app hợp lệ mà chưa Clear (chip mới, nạp dở, Start lỗi, nhận xong chưa Start), bootloader tự làm đúng như lệnh Clear lúc nhận request ghi `0x1F50:01`, nên response của request đó chậm thêm tối đa một lần xóa page. Có app hợp lệ (đọc `0`) thì vẫn bắt buộc Clear tường minh, không thì abort `0x08000022`.
+- `0x1F57:01` chỉ đọc được giữa hai transfer: chỉ có một SDO server, request đọc mới sẽ hủy transfer `0x1F50` đang dở. Flash được ghi ngay trong lúc nhận, nên khi transfer kết thúc thì kết quả đã có sẵn.
+- Không hỗ trợ (đều là tùy chọn): `0x100A`, `0x1F56`.
 - Bootloader **không hỗ trợ LSS** (CiA 305). Nếu cần LSS thì app làm, rồi ghi NodeID/bitrate vào config. Bootloader chỉ đọc config.
 
 ### 4.2 Mất bản tin và khôi phục
@@ -273,9 +277,9 @@ Mọi lệnh trong quy trình đều gửi lại được (idempotent). Khi mấ
 | Mất response của Stop | Đã ở bootloader | Gửi lại Stop (bootloader trả OK) hoặc đọc `0x1F51:01` |
 | Mất boot-up | Ở bootloader, heartbeat mặc định tắt | Poll đọc `0x1F51:01` tới khi ra `0`/`3`. Muốn nhận lại boot-up thì gửi NMT `0x82` (Reset Communication) |
 | Timeout ở Clear | Đã hoặc đang xóa page đầu | Gửi lại Clear. Page đã trống thì không xóa lại |
-| Mất block ACK, lỗi giữa chừng | Transfer dở | Gửi SDO abort → Clear → nạp lại |
+| Mất block ACK, lỗi giữa chừng | Transfer dở | Gửi SDO abort → nạp lại (Clear không bắt buộc) |
 | Mất response OK của Start | Đã reset sang app | Gửi lại Start (app trả OK, mục 3). Xác nhận bằng đọc `0x1F51:01 = 1` |
-| Mất abort của Start | Bootloader, nạp hỏng | Gửi lại Start sẽ nhận `0x08000022`. Clear rồi nạp lại |
+| Mất abort của Start | Bootloader, nạp hỏng | Gửi lại Start sẽ nhận `0x08000022`, `0x1F57:01` cho biết lỗi. Nạp lại (Clear không bắt buộc) |
 
 - Bootloader chỉ gửi boot-up **một lần**, nên master không được coi boot-up là điều kiện bắt buộc. Nên chờ boot-up một khoảng ngắn, nếu không thấy thì chuyển sang poll.
 - **Chỉ gửi NMT `0x81` (Reset Node) riêng lẻ khi muốn node về app.** Magic đã bị xóa từ lần boot trước, nên nếu app cũ còn hợp lệ (chưa Clear) thì hết cửa sổ node sẽ nhảy về app. Dùng `0x81` kèm gửi Stop liên tục (mục 4.4) thì node mới ở lại bootloader.
@@ -291,11 +295,11 @@ Master hủy được ở bất kỳ bước nào để nạp image khác:
 | Sau Stop, chưa Clear | Start để quay về app cũ (app còn hợp lệ thì bootloader trả OK rồi reset vào app), hoặc Clear để nạp bản khác |
 | Đang nhận SDO block | **Gửi SDO abort trước.** Theo CiA 301, trong pha nhận block mọi frame khác đều bị coi là segment, nên gửi thẳng lệnh mới sẽ không có tác dụng |
 | Đang nhận SDO segmented | Gửi SDO abort, hoặc gửi luôn request mới (request mới hủy transfer cũ) |
-| Nhận xong, chưa Start | Clear |
-| Start bị abort | Clear |
+| Nhận xong, chưa Start | Nạp lại luôn (Clear không bắt buộc) |
+| Start bị abort | Nạp lại luôn (Clear không bắt buộc) |
 | Đang Clear | Không hủy được, phải chờ lệnh xong |
 
-- Sau khi hủy, node coi như nạp hỏng: phải Clear thì mới nạp lại được.
+- Sau khi hủy, node coi như nạp hỏng (không có app hợp lệ). Lần ghi `0x1F50:01` tiếp theo tự Clear, nên nạp lại ngay được.
 - Sau Clear thì không quay về app cũ được, vì chỉ có một vùng app, không có bản sao lưu. Mất điện lúc này thì node vẫn đứng ở bootloader (không có app hợp lệ), nên luôn nạp lại được.
 
 ### 4.4 Cứu node
@@ -538,7 +542,7 @@ Chỉ dùng 1 page để tiết kiệm flash. Như vậy chấp nhận rủi ro 
 - [x] Mỗi lần boot có verify lại chữ ký không → **Không**, chỉ kiểm tra cờ valid + CRC (mục 5).
 - [x] Hành vi khi NodeID hoặc bitrate trong config bị hỏng → dùng giá trị mặc định hard-code (mục 6.2).
 - [ ] Giá trị mặc định của NodeID và bitrate (mục 6.4).
-- [x] Có hỗ trợ `0x1F56` (software identification) và `0x1F57` (flash status) không → **Không**, chỉ hỗ trợ object bắt buộc (mục 4.1).
+- [x] Có hỗ trợ `0x1F56` (software identification) và `0x1F57` (flash status) không → `0x1F56` **không**. `0x1F57` **có**, vì tool manager CiA 302-3 (ví dụ `canopenctl`) poll nó sau khi tải `0x1F50` (mục 4.1).
 - [x] Có cơ chế chống rollback không → **Có**, dùng `security_version` + bộ đếm trong OTP. `app_version` không bị hạn chế (mục 5.6).
 - [x] Cứu node khi app hợp lệ nhưng không phản hồi Stop → **Có**, cửa sổ chỉ nghe lúc boot, `T = max(20 ms, 6 × t_frame)`, SYSCLK lên 150 MHz ngay từ đầu, FDCAN chạy từ HSE (mục 3.1, 4.4).
 - [x] Bật/tắt cửa sổ → cố định lúc build (`T_min = 0` để tắt), không đặt trong config (mục 3.1).
