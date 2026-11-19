@@ -20,7 +20,8 @@ common/              Thư viện BLC (BootLoader Common), dùng chung app + boot
   blc_common.mk        Fragment cho Makefile
   CMakeLists.txt       Target `blc_common` cho dự án CMake
 bootloader/          Firmware bootloader (kích thước vùng: `BLC_BOOTLOADER_SIZE`)
-  src/board.h          Chân CAN, tần số HSE  <-- chỉnh theo board
+  boards/              File cấu hình từng board (chọn bằng make BOARD=...)
+  src/board.h          Nạp file board + giá trị mặc định (không cần sửa)
 tools/blc_image.py   Ký image, xuất public key, xem header
 examples/app/        Ví dụ tích hợp vào app + linker script mẫu
 tests/               Test trên PC (flash giả, mô phỏng quy trình nạp CiA 302-3)
@@ -43,12 +44,56 @@ python3 tools/blc_image.py keygen --out keys/dev   # khóa dev (private key bị
 ## Build bootloader
 
 ```sh
-make -C bootloader MCU=STM32G474xx      # hoặc STM32G431xx, STM32G491xx, ...
-# -> bootloader/build/STM32G474xx/bootloader.{elf,bin,hex}
+make -C bootloader MCU=STM32G474xx              # board generic, chọn chip
+make -C bootloader BOARD=<tên>                   # board trong bootloader/boards/<tên>.h
+make -C bootloader BOARD_FILE=/path/myboard.h    # file board ngoài repo
+# -> bootloader/build/<board>/<MCU>/bootloader.{elf,bin,hex}
 ```
 
 Ghi đè giá trị mặc định khi cần, ví dụ:
 `make -C bootloader EXTRA_CFLAGS="-DBLC_CFG_DEFAULT_NODE_ID=10 -DBOARD_HSE_HZ=24000000"`.
+
+### Cấu hình board
+
+Mỗi board là một file `.h` chỉ gồm `#define` (không `#include`), không phải sửa
+code. Thêm board: chép [bootloader/boards/example.h](bootloader/boards/example.h)
+(mẫu đủ mọi tùy chọn) vào `bootloader/boards/` hoặc để ngoài repo rồi dùng
+`BOARD_FILE=`. Macro bỏ trống lấy mặc định trong `src/board.h`. Chân GPIO viết
+dạng `cổng, số` (`B, 12` = PB12).
+
+| Macro | Mặc định | Ý nghĩa |
+|---|---|---|
+| `BOARD_MCU` | (không có) | Chip, vd. `STM32G474xx`. Không có thì chọn bằng `make MCU=...`; có thì `MCU=` khác giá trị này sẽ báo lỗi |
+| `BOARD_HSE_HZ` | `8000000u` | Tần số HSE (clock FDCAN). `0` = không có HSE, FDCAN chạy bằng PCLK1 (HSI ±1%, chỉ hợp bitrate thấp) |
+| `BOARD_HSE_BYPASS` | `0` | `1` = clock ngoài (oscillator) thay cho thạch anh |
+| `BOARD_CAN_INSTANCE` | `1` | FDCAN1/2/3. Chip không có instance đó thì báo lỗi lúc build |
+| `BOARD_CAN_RX`, `BOARD_CAN_TX` | `A, 11` / `A, 12` | Chân CAN |
+| `BOARD_CAN_AF` | `9` (FDCAN3: `11`) | Alternate function của chân CAN |
+| `BOARD_CAN_PWR` | (không có) | Chân cấp nguồn cho transceiver |
+| `BOARD_CAN_PWR_ACTIVE` | `1` | Mức logic để có nguồn |
+| `BOARD_CAN_PWR_DELAY_MS` | `5u` | Chờ nguồn ổn định trước khi cấu hình chân CAN |
+| `BOARD_CAN_STBY` | (không có) | Chân STBY/EN/S của transceiver |
+| `BOARD_CAN_STBY_ACTIVE` | `0` | Mức logic để transceiver hoạt động |
+
+Thứ tự khi khởi tạo CAN: bật nguồn transceiver → chờ `BOARD_CAN_PWR_DELAY_MS` →
+chân RX/TX sang AF → STBY về mức hoạt động. Bật nguồn trước để transceiver chưa
+có nguồn không bị cấp ngược qua chân TX. Các chân này chỉ được bootloader điều
+khiển khi chạy CANopen. Khi nhảy thẳng sang app, app tự bật nguồn/STBY cho
+transceiver.
+
+**Chân BOOT0:** bootloader luôn đặt option byte `nSWBOOT0 = 0`, `nBOOT0 = 1`
+(boot từ flash chính, không đọc chân BOOT0/PB8, không vào được ROM bootloader
+của ST bằng chân này). Cần cho board dùng PB8 làm CAN RX: bus rảnh ở mức 1 nên
+chip sẽ vào ROM bootloader ở mọi lần reset. Lần chạy đầu bootloader tự ghi
+option byte rồi reset một lần. Nhưng trên board PB8 = CAN RX, chip mới
+(`nSWBOOT0 = 1`) có thể vào ROM ngay từ lần reset đầu, bootloader chưa kịp chạy.
+Vì vậy **khi sản xuất nên đặt option byte cùng lúc nạp bootloader**:
+
+```sh
+STM32_Programmer_CLI -c port=SWD -w bootloader/build/<board>/<MCU>/bootloader.hex -ob nSWBOOT0=0 nBOOT0=1
+```
+
+SWD vẫn đọc/ghi được option byte và flash như bình thường.
 
 **G47x/G48x:** option byte `DBANK` phải bằng `0`. Nếu không, bootloader không
 nhảy sang app và từ chối Clear (abort `0x06060000`), để tránh xóa nhầm page.
@@ -205,7 +250,8 @@ chừng để nạp image khác).
 - Chốt dòng chip (design.md mục 7). Code đã hỗ trợ cả hai bảng phân vùng.
 - Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s trong `blc_config_ids.h`.
 - Hằng số identity (`blc_identity.h`): device type, vendor ID, product code, revision.
-- `bootloader/src/board.h`: chân CAN, chân STBY của transceiver, tần số HSE (tạm 8 MHz).
+- Thêm file board thật vào `bootloader/boards/` (hiện chỉ có `generic` và mẫu `example`).
+  Mới kiểm tra build; FDCAN2/3 và chân `BOARD_CAN_PWR`/`STBY` **chưa chạy thử trên phần cứng**.
 - Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–9 trên G431/G491, 0–4 trên G474) khi sản xuất.
 - Rủi ro: app hợp lệ nhưng không xử lý được Stop program thì không về được
-  bootloader qua CAN. Có thể cân nhắc thêm cửa sổ chờ ngắn lúc boot.
+  bootloader qua CAN (chân BOOT0 cũng đã bị bỏ qua, chỉ còn cách nạp lại qua SWD). Có thể cân nhắc thêm cửa sổ chờ ngắn lúc boot.

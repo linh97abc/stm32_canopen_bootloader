@@ -10,7 +10,8 @@ CANopen (CiA 302-3) firmware-update bootloader for STM32G4 over FDCAN. Project d
 git submodule update --init --depth 1       # ST CMSIS/LL headers in third_party/ (required to build firmware)
 pip install cryptography                    # for tools/blc_image.py
 
-make -C bootloader MCU=STM32G474xx          # also STM32G431xx, STM32G491xx, ... -> bootloader/build/<MCU>/bootloader.{elf,bin,hex}
+make -C bootloader MCU=STM32G474xx          # generic board; also STM32G431xx, STM32G491xx, ... -> bootloader/build/<board>/<MCU>/bootloader.{elf,bin,hex}
+make -C bootloader BOARD=example            # board file bootloader/boards/<name>.h (or BOARD_FILE=<any path>.h)
 make -C bootloader PUBKEY=<path>/prod_public.pem   # embed a different signing public key (default: keys/dev_public.pem)
 
 make -C tests                               # host-side tests (gcc + ASan/UBSan); keys are generated in tests/build/
@@ -42,5 +43,6 @@ Three flash regions (see `common/include/blc/blc_layout.h`, the single source of
 
 - `keys/dev_public.pem` is committed and is the default bootloader key; `keys/*_private.pem` is git-ignored. Tests never use `keys/`.
 - `bootloader/src/pubkey.h` declares the key; the actual `pubkey.c` is generated into the build dir from a PEM by `blc_image.py pubkey-c`.
-- Board-specific values (CAN pins, transceiver STBY pin, HSE frequency) live in `bootloader/src/board.h`; NodeID/bitrate defaults in `blc_config_ids.h`; override with `EXTRA_CFLAGS="-D..."`.
+- Board-specific values (MCU, HSE, FDCAN instance, CAN pins, transceiver power/STBY pins) live in per-board files `bootloader/boards/<name>.h` (only `#define`s, no `#include`: the Makefile reads `BOARD_MCU` with `gcc -E -dM`; pins written as `B, 12`). `bootloader/src/board.h` includes the selected file via `-DBOARD_FILE` and supplies defaults + derived macros (`BOARD_CAN_FDCAN`, `BOARD_CAN_IRQn`, `BOARD_PIN()`); never put board values in source files. NodeID/bitrate defaults in `blc_config_ids.h`; override with `EXTRA_CFLAGS="-D..."`.
+- First thing in `main()`, `blc_flash_ob_ignore_boot0_pin()` forces option bytes `nSWBOOT0=0`, `nBOOT0=1` (always boot from main flash; PB8 = BOOT0 can be FDCAN1_RX, idle-high bus would otherwise enter ST's ROM bootloader). It rewrites OB + `OBL_LAUNCH` only when wrong, and gives up if the last reset was already an OBL reset (no reset loop). Must stay before `blc_boot_take_request()`.
 - The CPU runs at 150 MHz from HSI16 PLL; FDCAN is clocked from HSE (falls back to PCLK1). IWDG may be enabled by option byte, so any long loop must call `watchdog_kick()`.

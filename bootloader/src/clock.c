@@ -27,6 +27,7 @@ static void delay_cycles(uint32_t n)
     }
 }
 
+#if BOARD_HSE_HZ != 0
 static bool hse_start(void)
 {
 #if BOARD_HSE_BYPASS
@@ -41,6 +42,7 @@ static bool hse_start(void)
     LL_RCC_HSE_Disable();
     return false;
 }
+#endif
 
 void clock_init(void)
 {
@@ -72,11 +74,15 @@ void clock_init(void)
     LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_1);
     SystemCoreClock = BL_SYSCLK_HZ;
 
+    s_fdcan_hz = 0u;
+#if BOARD_HSE_HZ != 0
     if (hse_start()) {
         LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_HSE);
         s_fdcan_hz = BOARD_HSE_HZ;
-    } else {
-        /* Dự phòng: HSI ±1%, chỉ tin cậy ở bitrate thấp. */
+    }
+#endif
+    if (s_fdcan_hz == 0u) {
+        /* Không có HSE hoặc HSE không lên: HSI ±1%, chỉ tin cậy ở bitrate thấp. */
         LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_PCLK1);
         s_fdcan_hz = BL_SYSCLK_HZ;
     }

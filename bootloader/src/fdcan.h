@@ -11,7 +11,8 @@ typedef struct {
 } can_frame_t;
 
 /**
- * Khởi tạo FDCAN1 ở chế độ CAN classic. Bộ lọc phần cứng chỉ nhận
+ * Khởi tạo FDCAN (instance theo board) ở chế độ CAN classic. Bật nguồn và
+ * STBY của transceiver nếu board có. Bộ lọc phần cứng chỉ nhận
  * NMT (0x000) và SDO request (0x600 + node_id) vào RX FIFO0; ngắt RF0N
  * chuyển frame sang ring buffer.
  */

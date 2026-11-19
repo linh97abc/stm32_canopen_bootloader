@@ -1,7 +1,9 @@
 /**
- * FDCAN1 (STM32G4) ở mức thanh ghi: LL không hỗ trợ FDCAN.
+ * FDCAN (STM32G4) ở mức thanh ghi: LL không hỗ trợ FDCAN. Instance và chân
+ * lấy từ file board (board.h).
  *
- * Message RAM của G4 có bố cục cố định (RM0440, mục FDCAN):
+ * Message RAM của G4 có bố cục cố định (RM0440, mục FDCAN), mỗi instance một
+ * khối 0x350 byte liền nhau (FDCAN1, FDCAN2, FDCAN3):
  *   28 std filter | 8 ext filter | RX FIFO0 (3) | RX FIFO1 (3) | TX event (3) | TX FIFO (3)
  */
 #include "fdcan.h"
@@ -14,8 +16,11 @@
 #include "stm32g4xx_ll_bus.h"
 #include "stm32g4xx_ll_gpio.h"
 
-#define CAN_INST          FDCAN1
-#define MRAM_BASE         SRAMCAN_BASE      /* FDCAN1 dùng khối đầu tiên */
+_Static_assert(BOARD_PIN_NUM(BOARD_CAN_RX) < 16u && BOARD_PIN_NUM(BOARD_CAN_TX) < 16u,
+               "BOARD_CAN_RX/TX: số chân phải 0..15");
+
+#define CAN_INST          BOARD_CAN_FDCAN
+#define MRAM_BASE         (SRAMCAN_BASE + MRAM_SIZE * (BOARD_CAN_INSTANCE - 1u))
 #define MRAM_FLS          (MRAM_BASE + 0x000u)
 #define MRAM_RF0          (MRAM_BASE + 0x0B0u)
 #define MRAM_TXB          (MRAM_BASE + 0x278u)
@@ -61,32 +66,80 @@ static bool calc_timing(uint32_t clk, uint32_t bitrate, uint32_t *nbtp)
     return false;
 }
 
+static void pin_clock(const board_pin_t *p)
+{
+    RCC->AHB2ENR |= p->rcc_en;
+    (void)RCC->AHB2ENR;
+}
+
+/* Chọn AF trước rồi mới chuyển mode, để chân không ra AF0 trong chốc lát. */
+static void pin_can(const board_pin_t *p)
+{
+    uint32_t mask = 1UL << p->num;
+    pin_clock(p);
+    if (p->num < 8u) {
+        LL_GPIO_SetAFPin_0_7(p->port, mask, BOARD_CAN_AF);
+    } else {
+        LL_GPIO_SetAFPin_8_15(p->port, mask, BOARD_CAN_AF);
+    }
+    LL_GPIO_SetPinSpeed(p->port, mask, LL_GPIO_SPEED_FREQ_HIGH);
+    LL_GPIO_SetPinOutputType(p->port, mask, LL_GPIO_OUTPUT_PUSHPULL);
+    LL_GPIO_SetPinPull(p->port, mask, LL_GPIO_PULL_NO);
+    LL_GPIO_SetPinMode(p->port, mask, LL_GPIO_MODE_ALTERNATE);
+}
+
+#if defined(BOARD_CAN_PWR) || defined(BOARD_CAN_STBY)
+/* Đặt mức ra trước rồi mới chuyển sang output: không có xung sai mức. */
+static void pin_out(const board_pin_t *p, bool level)
+{
+    uint32_t mask = 1UL << p->num;
+    pin_clock(p);
+    if (level) {
+        LL_GPIO_SetOutputPin(p->port, mask);
+    } else {
+        LL_GPIO_ResetOutputPin(p->port, mask);
+    }
+    LL_GPIO_SetPinSpeed(p->port, mask, LL_GPIO_SPEED_FREQ_LOW);
+    LL_GPIO_SetPinOutputType(p->port, mask, LL_GPIO_OUTPUT_PUSHPULL);
+    LL_GPIO_SetPinPull(p->port, mask, LL_GPIO_PULL_NO);
+    LL_GPIO_SetPinMode(p->port, mask, LL_GPIO_MODE_OUTPUT);
+}
+#endif
+
+#ifdef BOARD_CAN_PWR
+_Static_assert(BOARD_PIN_NUM(BOARD_CAN_PWR) < 16u, "BOARD_CAN_PWR: số chân phải 0..15");
+
+/* Bật nguồn transceiver một lần (fdcan_init có thể được gọi lại khi đổi bitrate). */
+static void transceiver_power_on(void)
+{
+    static bool s_powered;
+    if (s_powered) {
+        return;
+    }
+    static const board_pin_t pwr = BOARD_PIN(BOARD_CAN_PWR);
+    pin_out(&pwr, BOARD_CAN_PWR_ACTIVE != 0);
+    uint32_t t0 = clock_ms();
+    while ((clock_ms() - t0) <= (uint32_t)(BOARD_CAN_PWR_DELAY_MS)) {   /* >= DELAY_MS */
+        watchdog_kick();
+    }
+    s_powered = true;
+}
+#endif
+
+/* Thứ tự: nguồn transceiver -> chân CAN -> STBY về mức hoạt động. */
 static void gpio_init(void)
 {
-    RCC->AHB2ENR |= BOARD_CAN_GPIO_CLK;
-    (void)RCC->AHB2ENR;
-    const uint32_t pins[2] = {BOARD_CAN_RX_PIN, BOARD_CAN_TX_PIN};
-    for (unsigned i = 0; i < 2u; i++) {
-        uint32_t pin = pins[i];
-        LL_GPIO_SetPinMode(BOARD_CAN_GPIO, pin, LL_GPIO_MODE_ALTERNATE);
-        LL_GPIO_SetPinSpeed(BOARD_CAN_GPIO, pin, LL_GPIO_SPEED_FREQ_HIGH);
-        LL_GPIO_SetPinOutputType(BOARD_CAN_GPIO, pin, LL_GPIO_OUTPUT_PUSHPULL);
-        LL_GPIO_SetPinPull(BOARD_CAN_GPIO, pin, LL_GPIO_PULL_NO);
-        if (pin <= LL_GPIO_PIN_7) {
-            LL_GPIO_SetAFPin_0_7(BOARD_CAN_GPIO, pin, BOARD_CAN_AF);
-        } else {
-            LL_GPIO_SetAFPin_8_15(BOARD_CAN_GPIO, pin, BOARD_CAN_AF);
-        }
-    }
-#ifdef BOARD_CAN_STBY_GPIO
-    RCC->AHB2ENR |= BOARD_CAN_STBY_GPIO_CLK;
-    (void)RCC->AHB2ENR;
-    if (BOARD_CAN_STBY_ACTIVE) {
-        LL_GPIO_SetOutputPin(BOARD_CAN_STBY_GPIO, BOARD_CAN_STBY_PIN);
-    } else {
-        LL_GPIO_ResetOutputPin(BOARD_CAN_STBY_GPIO, BOARD_CAN_STBY_PIN);
-    }
-    LL_GPIO_SetPinMode(BOARD_CAN_STBY_GPIO, BOARD_CAN_STBY_PIN, LL_GPIO_MODE_OUTPUT);
+#ifdef BOARD_CAN_PWR
+    transceiver_power_on();
+#endif
+    static const board_pin_t rx = BOARD_PIN(BOARD_CAN_RX);
+    static const board_pin_t tx = BOARD_PIN(BOARD_CAN_TX);
+    pin_can(&rx);
+    pin_can(&tx);
+#ifdef BOARD_CAN_STBY
+    _Static_assert(BOARD_PIN_NUM(BOARD_CAN_STBY) < 16u, "BOARD_CAN_STBY: số chân phải 0..15");
+    static const board_pin_t stby = BOARD_PIN(BOARD_CAN_STBY);
+    pin_out(&stby, BOARD_CAN_STBY_ACTIVE != 0);
 #endif
 }
 
@@ -131,9 +184,9 @@ bool fdcan_init(uint32_t kernel_hz, uint32_t bitrate, uint8_t node_id)
     CAN_INST->ILE = FDCAN_ILE_EINT0;
 
     s_head = s_tail = 0u;
-    NVIC_SetPriority(FDCAN1_IT0_IRQn, 1u);
-    NVIC_ClearPendingIRQ(FDCAN1_IT0_IRQn);
-    NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
+    NVIC_SetPriority(BOARD_CAN_IRQn, 1u);
+    NVIC_ClearPendingIRQ(BOARD_CAN_IRQn);
+    NVIC_EnableIRQ(BOARD_CAN_IRQn);
 
     CAN_INST->CCCR &= ~FDCAN_CCCR_INIT;
     return wait_cccr(FDCAN_CCCR_INIT, false);
@@ -141,14 +194,14 @@ bool fdcan_init(uint32_t kernel_hz, uint32_t bitrate, uint8_t node_id)
 
 void fdcan_deinit(void)
 {
-    NVIC_DisableIRQ(FDCAN1_IT0_IRQn);
+    NVIC_DisableIRQ(BOARD_CAN_IRQn);
     LL_APB1_GRP1_ForceReset(LL_APB1_GRP1_PERIPH_FDCAN);
     LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_FDCAN);
     LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_FDCAN);
-    NVIC_ClearPendingIRQ(FDCAN1_IT0_IRQn);
+    NVIC_ClearPendingIRQ(BOARD_CAN_IRQn);
 }
 
-void FDCAN1_IT0_IRQHandler(void)
+void BOARD_CAN_IRQHandler(void)
 {
     CAN_INST->IR = FDCAN_IR_RF0N | FDCAN_IR_RF0L | FDCAN_IR_RF0F;
     uint32_t st;

@@ -1,8 +1,10 @@
 /**
- * Startup tối giản cho bootloader: vector table chỉ tới FDCAN1_IT0 (IRQ 21).
+ * Startup tối giản cho bootloader: vector table chỉ tới ngắt IT0 của FDCAN
+ * mà board dùng (FDCAN1: IRQ 21, FDCAN2: 86, FDCAN3: 88).
  */
 #include <stdint.h>
 
+#include "board.h"
 #include "stm32g4xx.h"
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
@@ -12,7 +14,7 @@ void Reset_Handler(void);
 void NMI_Handler(void);
 void HardFault_Handler(void);
 void SysTick_Handler(void);
-void FDCAN1_IT0_IRQHandler(void);
+void BOARD_CAN_IRQHandler(void);
 
 __attribute__((noreturn)) static void Fault_Handler(void)
 {
@@ -33,7 +35,7 @@ void Reset_Handler(void)
     Fault_Handler();
 }
 
-#define VECTORS_N (16 + FDCAN1_IT0_IRQn + 1)
+#define VECTORS_N (16 + BOARD_CAN_IRQn + 1)
 
 __attribute__((section(".isr_vector"), used))
 const void *const g_vectors[VECTORS_N] = {
@@ -47,7 +49,7 @@ const void *const g_vectors[VECTORS_N] = {
     [11] = (const void *)Fault_Handler, /* SVC */
     [14] = (const void *)Fault_Handler, /* PendSV */
     [15] = (const void *)SysTick_Handler,
-    [16 + FDCAN1_IT0_IRQn] = (const void *)FDCAN1_IT0_IRQHandler,
+    [16 + BOARD_CAN_IRQn] = (const void *)BOARD_CAN_IRQHandler,
 };
 
 void HardFault_Handler(void) { Fault_Handler(); }

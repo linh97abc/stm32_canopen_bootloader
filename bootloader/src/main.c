@@ -2,6 +2,7 @@
  * Bootloader CANopen cho STM32G4 (xem docs/design.md).
  *
  * Luồng khởi động:
+ *   0. Option byte chưa bỏ qua chân BOOT0 thì ghi lại rồi reset (một lần).
  *   1. Đọc magic trong backup register (app yêu cầu ở lại bootloader).
  *   2. Không có magic + app hợp lệ (header, CRC, valid flag) -> nhảy sang app
  *      ngay, khi clock còn ở trạng thái reset (HSI16), chưa bật ngoại vi nào.
@@ -40,6 +41,10 @@ static void boot_path_cleanup(void)
 
 int main(void)
 {
+    /* Trước blc_boot_take_request(): OBL reset giữ backup register, yêu cầu
+     * ở lại bootloader (nếu có) vẫn còn sau khi reset. Lỗi thì vẫn chạy tiếp. */
+    (void)blc_flash_ob_ignore_boot0_pin();
+
     bool stay = blc_boot_take_request();
     bool layout_ok = blc_layout_check();
     uint32_t sec_min = blc_secver_min();
