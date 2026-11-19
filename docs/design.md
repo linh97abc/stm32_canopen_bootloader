@@ -158,7 +158,7 @@ flowchart TD
 | Đã dùng | Đưa về |
 |---|---|
 | FDCAN | Reset qua RCC, tắt clock. Tắt ngắt, xóa pending, priority về 0 |
-| GPIO của CAN (RX, TX, chân STBY nếu có) | Reset port qua RCC, tắt clock port |
+| GPIO của CAN (RX, TX, chân PWR/STBY của transceiver nếu có) | Reset port qua RCC, tắt clock port (transceiver mất nguồn, app tự bật lại) |
 | Nguồn clock của FDCAN | Giá trị reset (HSE) |
 | HSE | Tắt, chờ tắt hẳn, bỏ bypass |
 | SysTick | Tắt, xóa bộ đếm, priority về 0, xóa pending |

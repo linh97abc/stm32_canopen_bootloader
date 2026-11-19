@@ -10,6 +10,8 @@
 
 #define FLASH_KEY1  0x45670123UL
 #define FLASH_KEY2  0xCDEF89ABUL
+#define OPT_KEY1    0x08192A3BUL
+#define OPT_KEY2    0x4C5D6E7FUL
 
 #define FLASH_SR_ERRORS (FLASH_SR_OPERR | FLASH_SR_PROGERR | FLASH_SR_WRPERR | FLASH_SR_PGAERR | \
                          FLASH_SR_SIZERR | FLASH_SR_PGSERR | FLASH_SR_MISERR | FLASH_SR_FASTERR | \
@@ -111,4 +113,36 @@ bool blc_flash_erase_page(uint32_t addr)
     flash_lock();
     flash_flush_caches();
     return ok;
+}
+
+bool blc_flash_ob_ignore_boot0_pin(void)
+{
+    uint32_t optr = FLASH->OPTR;
+    uint32_t want = (optr & ~FLASH_OPTR_nSWBOOT0) | FLASH_OPTR_nBOOT0;
+    if (optr == want) {
+        return true;
+    }
+    if ((RCC->CSR & RCC_CSR_OBLRSTF) != 0u) {
+        return false; /* đã ghi + OBL reset mà vẫn sai: không thử lại */
+    }
+    if (!flash_unlock()) {
+        return false;
+    }
+    if ((FLASH->CR & FLASH_CR_OPTLOCK) != 0u) {
+        FLASH->OPTKEYR = OPT_KEY1;
+        FLASH->OPTKEYR = OPT_KEY2;
+    }
+    bool ok = (FLASH->CR & FLASH_CR_OPTLOCK) == 0u;
+    if (ok) {
+        FLASH->OPTR = want;
+        FLASH->CR |= FLASH_CR_OPTSTRT;
+        ok = flash_wait();
+    }
+    if (ok) {
+        FLASH->CR |= FLASH_CR_OBL_LAUNCH; /* reset ngay, nạp option byte mới */
+        __DSB();
+    }
+    FLASH->CR |= FLASH_CR_OPTLOCK;
+    flash_lock();
+    return false;
 }

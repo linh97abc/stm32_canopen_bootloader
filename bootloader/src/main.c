@@ -2,6 +2,7 @@
  * Bootloader CANopen cho STM32G4 (xem docs/design.md).
  *
  * Luồng khởi động:
+ *   0. Option byte chưa bỏ qua chân BOOT0 thì ghi lại rồi reset (một lần).
  *   1. Lên 150 MHz ở mọi nhánh, đọc config (NodeID, bitrate).
  *   2. Đọc và xóa magic trong backup register, kiểm tra app.
  *      - STAY (app nhận Stop): ở lại bootloader.
@@ -87,6 +88,10 @@ static bool rescue_window(uint8_t node_id, uint8_t bitrate_idx, can_frame_t *sto
 
 int main(void)
 {
+    /* Đầu tiên, trước blc_boot_take_request(): OBL reset giữ backup register,
+     * yêu cầu ở lại bootloader (nếu có) vẫn còn sau reset. Lỗi thì chạy tiếp. */
+    (void)blc_flash_ob_ignore_boot0_pin();
+
     clock_init();
 
     bool layout_ok = blc_layout_check();

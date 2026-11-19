@@ -29,7 +29,7 @@ static void delay_cycles(uint32_t n)
 
 void clock_hse_start(void)
 {
-    if (s_hse_started) {
+    if (BOARD_HSE_HZ == 0u || s_hse_started) { /* 0 = board không có HSE */
         return;
     }
 #if BOARD_HSE_BYPASS
@@ -44,6 +44,9 @@ void clock_hse_start(void)
  * được trừ vào. Cần SysTick đang chạy (s_ms tăng). */
 static bool hse_wait_ready(void)
 {
+    if (BOARD_HSE_HZ == 0u) {
+        return false;
+    }
     clock_hse_start();
     while (!LL_RCC_HSE_IsReady()) {
         if ((s_ms - s_hse_t0) > BOARD_HSE_TIMEOUT_MS) {
@@ -56,7 +59,8 @@ static bool hse_wait_ready(void)
 
 uint32_t clock_fdcan_init(void)
 {
-    /* FDCAN chạy từ HSE. HSE không lên thì dùng PCLK1 (HSI ±1%, chỉ tin cậy ở bitrate thấp). */
+    /* FDCAN chạy từ HSE. Không có HSE hoặc HSE không lên thì dùng PCLK1
+     * (HSI ±1%, chỉ tin cậy ở bitrate thấp). */
     if (hse_wait_ready()) {
         LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_HSE);
         s_fdcan_hz = BOARD_HSE_HZ;
