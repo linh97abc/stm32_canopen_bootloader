@@ -30,13 +30,24 @@
 #define BLC_BITRATE_IDX_10K       8u
 
 /* ---- Giá trị mặc định ---------------------------------------------------
- * TODO(design.md mục 7): giá trị chính thức chưa chốt. Có thể ghi đè bằng -D.
+ * Dùng khi config chưa có giá trị (chip mới) hoặc giá trị hỏng. Không sửa ở
+ * đây cho từng board: đặt trong file board (BLC_BOARD_FILE, xem blc_common.mk)
+ * hoặc -D. App và bootloader phải dùng cùng giá trị, nếu không chip mới sẽ
+ * chạy NodeID/bitrate khác nhau ở hai bên.
+ * TODO(design.md mục 7): giá trị mặc định chính thức chưa chốt.
  */
 #ifndef BLC_CFG_DEFAULT_NODE_ID
 #define BLC_CFG_DEFAULT_NODE_ID       127u
 #endif
 #ifndef BLC_CFG_DEFAULT_BITRATE_IDX
 #define BLC_CFG_DEFAULT_BITRATE_IDX   BLC_BITRATE_IDX_250K
+#endif
+
+#if BLC_CFG_DEFAULT_NODE_ID < 1 || BLC_CFG_DEFAULT_NODE_ID > 127
+#error "BLC_CFG_DEFAULT_NODE_ID phải trong 1..127"
+#endif
+#if BLC_CFG_DEFAULT_BITRATE_IDX > BLC_BITRATE_IDX_10K || BLC_CFG_DEFAULT_BITRATE_IDX == 5
+#error "BLC_CFG_DEFAULT_BITRATE_IDX không có trong bảng CiA 305 (dùng BLC_BITRATE_IDX_*)"
 #endif
 
 #endif /* BLC_CONFIG_IDS_H */

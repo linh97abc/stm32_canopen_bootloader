@@ -3,9 +3,14 @@
 # Dùng trong Makefile:
 #   include <đường dẫn>/common/blc_common.mk
 #   SRCS     += $(BLC_COMMON_SRCS)
-#   CFLAGS   += $(addprefix -I,$(BLC_COMMON_INCS)) -D$(MCU)
+#   CFLAGS   += $(addprefix -I,$(BLC_COMMON_INCS)) $(BLC_COMMON_CFLAGS) -D$(MCU)
 #
 # Yêu cầu: define dòng chip CMSIS (vd. -DSTM32G474xx).
+#
+# Tùy chọn: BLC_BOARD_FILE = file board (vd. bootloader/boards/<tên>.h), đặt trước
+# hoặc sau include đều được. File được -include vào mọi file nguồn, nên các giá trị
+# hai bên phải giống nhau (NodeID/bitrate mặc định, identity, BLC_BOOT_BKP_INDEX...)
+# lấy từ một chỗ. App và bootloader của cùng board nên dùng chung file này.
 
 BLC_COMMON_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 BLC_ROOT       := $(BLC_COMMON_DIR)/..
@@ -27,3 +32,6 @@ BLC_CMSIS_INCS := \
     $(BLC_ROOT)/third_party/stm32g4xx_hal_driver/Inc
 
 BLC_COMMON_INCS := $(BLC_COMMON_DIR)/include $(BLC_CMSIS_INCS)
+
+# "=" (không phải ":="): BLC_BOARD_FILE được đọc lúc dùng, có thể đặt sau include.
+BLC_COMMON_CFLAGS = $(if $(BLC_BOARD_FILE),-include $(abspath $(BLC_BOARD_FILE)))

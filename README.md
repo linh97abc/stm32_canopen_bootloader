@@ -50,16 +50,23 @@ make -C bootloader BOARD_FILE=/path/myboard.h    # file board ngoài repo
 # -> bootloader/build/<board>/<MCU>/bootloader.{elf,bin,hex}
 ```
 
-Ghi đè giá trị mặc định khi cần, ví dụ:
+Thử nhanh mà không cần file board thì truyền macro qua `EXTRA_CFLAGS`, ví dụ:
 `make -C bootloader EXTRA_CFLAGS="-DBLC_CFG_DEFAULT_NODE_ID=10 -DBOARD_HSE_HZ=24000000"`.
+Macro đã có trong file board thì file board thắng (gcc báo `redefined`).
 
 ### Cấu hình board
 
 Mỗi board là một file `.h` chỉ gồm `#define` (không `#include`), không phải sửa
 code. Thêm board: chép [bootloader/boards/example.h](bootloader/boards/example.h)
 (mẫu đủ mọi tùy chọn) vào `bootloader/boards/` hoặc để ngoài repo rồi dùng
-`BOARD_FILE=`. Macro bỏ trống lấy mặc định trong `src/board.h`. Chân GPIO viết
-dạng `cổng, số` (`B, 12` = PB12).
+`BOARD_FILE=`. Macro bỏ trống lấy mặc định trong `src/board.h` (hoặc header
+của `common/`). Chân GPIO viết dạng `cổng, số` (`B, 12` = PB12).
+
+File board được `-include` vào **mọi** file nguồn (`BLC_BOARD_FILE` trong
+`common/blc_common.mk`). Vì vậy nó đặt được cả các giá trị mà app và bootloader
+phải giống nhau, không phải sửa `common/`. Build app của board đó với cùng file
+(xem [Tích hợp vào app](#tích-hợp-vào-app)). Nếu không, chip mới (config trống)
+sẽ chạy NodeID/bitrate khác nhau ở bootloader và app.
 
 | Macro | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -75,6 +82,11 @@ dạng `cổng, số` (`B, 12` = PB12).
 | `BOARD_CAN_PWR_DELAY_MS` | `5u` | Chờ nguồn ổn định trước khi cấu hình chân CAN |
 | `BOARD_CAN_STBY` | (không có) | Chân STBY/EN/S của transceiver |
 | `BOARD_CAN_STBY_ACTIVE` | `0` | Mức logic để transceiver hoạt động |
+| `BLC_CFG_DEFAULT_NODE_ID` | `127u` | NodeID khi config chưa có (1..127, sai thì `#error`). Dùng chung với app |
+| `BLC_CFG_DEFAULT_BITRATE_IDX` | `BLC_BITRATE_IDX_250K` | Bitrate khi config chưa có (chỉ số CiA 305). Dùng chung với app |
+| `BLC_ID_DEVICE_TYPE`, `BLC_ID_VENDOR_ID`, `BLC_ID_PRODUCT_CODE`, `BLC_ID_REVISION` | `0` | Identity 0x1000/0x1018. Dùng chung với app |
+| `BLC_BOOT_BKP_INDEX` | `0u` | Backup register cho handoff app → bootloader. Dùng chung với app |
+| `BL_RESCUE_WINDOW_MIN_MS` | `20u` | Cửa sổ cứu node (`0` = tắt) |
 
 Thứ tự khi khởi tạo CAN: bật nguồn transceiver → chờ `BOARD_CAN_PWR_DELAY_MS` →
 chân RX/TX sang AF → STBY về mức hoạt động. Bật nguồn trước để transceiver chưa
@@ -124,7 +136,10 @@ Test tự sinh cặp khóa riêng trong `tests/build/` (không dùng `keys/`).
 Xem [examples/app/blc_app_glue.c](examples/app/blc_app_glue.c). Tóm tắt:
 
 1. Thêm thư viện: `include common/blc_common.mk` (Makefile) hoặc
-   `add_subdirectory(common)` (CMake), define dòng chip (`-DSTM32G474xx`).
+   `add_subdirectory(common)` (CMake), define dòng chip (`-DSTM32G474xx`). Dùng
+   cùng file board với bootloader: `BLC_BOARD_FILE=<repo>/bootloader/boards/<tên>.h`
+   và thêm `$(BLC_COMMON_CFLAGS)` vào `CFLAGS` (Makefile), hoặc
+   `set(BLC_BOARD_FILE ...)` trước `add_subdirectory` (CMake).
 2. Linker: `FLASH ORIGIN = BLC_APP_START`, thêm section `.app_header` gồm 28 byte 0
    tại `ORIGIN(FLASH) + 0x200` (mẫu: [examples/app/stm32g4_app.ld.S](examples/app/stm32g4_app.ld.S)).
 3. Không cần khai báo header trong code. Đọc header lúc runtime bằng `blc_app_header_in_flash()`.
@@ -254,8 +269,8 @@ chừng để nạp image khác).
 ## Việc còn mở (TODO)
 
 - Chốt dòng chip (design.md mục 7). Code đã hỗ trợ cả hai bảng phân vùng.
-- Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s trong `blc_config_ids.h`.
-- Hằng số identity (`blc_identity.h`): device type, vendor ID, product code, revision.
+- Giá trị mặc định NodeID / bitrate: tạm đặt `127` / 250 kbit/s (đổi theo board trong file board).
+- Hằng số identity: device type, vendor ID, product code, revision (đặt trong file board).
 - Thêm file board thật vào `bootloader/boards/` (hiện chỉ có `generic` và mẫu `example`).
   Mới kiểm tra build; FDCAN2/3 và chân `BOARD_CAN_PWR`/`STBY` **chưa chạy thử trên phần cứng**.
 - Khuyến nghị: bật WRP option byte cho vùng bootloader (page 0–9 trên G431/G491, 0–4 trên G474) khi sản xuất.

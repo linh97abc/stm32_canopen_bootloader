@@ -6,7 +6,9 @@
  *   make BOARD=<tên>               -> bootloader/boards/<tên>.h
  *   make BOARD_FILE=<đường dẫn>.h  -> file bất kỳ, kể cả ngoài repo
  *
- * File board chỉ chứa #define (không #include gì), xem boards/example.h.
+ * File board chỉ chứa #define (không #include gì), xem boards/example.h. Nó
+ * được -include vào mọi file nguồn (BLC_BOARD_FILE trong blc_common.mk), nên
+ * đặt được cả macro của common/ (NodeID/bitrate mặc định, identity...).
  * Macro nào file board không định nghĩa thì lấy mặc định bên dưới, và cũng
  * ghi đè được bằng EXTRA_CFLAGS="-D...".
  *
@@ -14,10 +16,6 @@
  */
 #ifndef BOARD_H
 #define BOARD_H
-
-#ifdef BOARD_FILE
-#include BOARD_FILE
-#endif
 
 #include <stdint.h>
 

@@ -8,7 +8,10 @@
  * Quy tắc:
  *   - Chỉ dùng #define, không #include (Makefile đọc BOARD_MCU bằng gcc -E).
  *   - Chân GPIO viết dạng "cổng, số": B, 12 nghĩa là PB12.
- *   - Macro bỏ trống thì lấy mặc định trong src/board.h.
+ *   - Macro bỏ trống thì lấy mặc định trong src/board.h (và các header của
+ *     common/ cho phần dùng chung).
+ *   - File được -include vào mọi file nguồn. Build app của board này với cùng
+ *     file (BLC_BOARD_FILE trong blc_common.mk / CMake) để phần dùng chung khớp.
  */
 
 /* Chip trên board. Bỏ dòng này nếu board lắp được nhiều chip, khi đó chọn
@@ -36,3 +39,19 @@
 /* Chân STBY/EN của transceiver (tùy chọn): PB14, mức 0 = hoạt động. */
 #define BOARD_CAN_STBY          B, 14
 #define BOARD_CAN_STBY_ACTIVE   0
+
+/* ---- Dùng chung app + bootloader (common/) ----
+ * Mặc định khi config chưa có giá trị (chip mới). NodeID 1..127, bitrate
+ * theo bảng CiA 305: BLC_BITRATE_IDX_1000K/800K/500K/250K/125K/50K/20K/10K. */
+#define BLC_CFG_DEFAULT_NODE_ID      10u
+#define BLC_CFG_DEFAULT_BITRATE_IDX  BLC_BITRATE_IDX_500K
+
+/* Identity CANopen 0x1000 / 0x1018 (mặc định 0). Vendor ID do CiA cấp. */
+/* #define BLC_ID_DEVICE_TYPE    0x00000000UL */
+/* #define BLC_ID_VENDOR_ID      0x00000000UL */
+/* #define BLC_ID_PRODUCT_CODE   0x00000000UL */
+/* #define BLC_ID_REVISION       0x00000000UL */
+
+/* Cửa sổ cứu node lúc boot (ms, 0 = tắt), backup register cho handoff. */
+/* #define BL_RESCUE_WINDOW_MIN_MS  20u */
+/* #define BLC_BOOT_BKP_INDEX       0u  */

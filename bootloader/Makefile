@@ -32,6 +32,7 @@ MCU     ?= STM32G474xx
 PUBKEY  ?= ../keys/dev_public.pem
 BUILD   ?= build/$(BOARD_NAME)/$(MCU)
 
+BLC_BOARD_FILE := $(BOARD_FILE)
 include ../common/blc_common.mk
 
 SRCS := \
@@ -44,8 +45,7 @@ GEN_PUBKEY := $(BUILD)/pubkey.c
 CPUFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
 CFLAGS   := $(CPUFLAGS) -std=c11 -Os -g3 -Wall -Wextra -Wshadow -Wno-unused-parameter \
             -ffunction-sections -fdata-sections -fno-common -ffreestanding \
-            -D$(MCU) -DBOARD_FILE='"$(abspath $(BOARD_FILE))"' \
-            -Isrc $(addprefix -I,$(BLC_COMMON_INCS)) $(EXTRA_CFLAGS)
+            -D$(MCU) -Isrc $(addprefix -I,$(BLC_COMMON_INCS)) $(BLC_COMMON_CFLAGS) $(EXTRA_CFLAGS)
 LDFLAGS  := $(CPUFLAGS) -nostartfiles --specs=nano.specs --specs=nosys.specs \
             -Wl,--gc-sections -Wl,-Map=$(BUILD)/bootloader.map -Wl,--print-memory-usage
 

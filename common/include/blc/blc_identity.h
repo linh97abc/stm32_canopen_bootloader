@@ -3,7 +3,8 @@
  * @brief Identity CANopen dùng chung (0x1000, 0x1018) cho app và bootloader
  *        (design.md mục 4.1).
  *
- * TODO: điền giá trị thật. Vendor ID do CiA cấp.
+ * Không sửa ở đây cho từng board/sản phẩm: đặt BLC_ID_* trong file board
+ * (BLC_BOARD_FILE, xem blc_common.mk) hoặc -D. Vendor ID do CiA cấp.
  */
 #ifndef BLC_IDENTITY_H
 #define BLC_IDENTITY_H
